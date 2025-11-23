@@ -1,56 +1,39 @@
 import os
-from typing import List, Tuple, Any
-
 import psycopg2
 import psycopg2.extras
 
 
-# Lê as variáveis de ambiente vindas do Railway
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = int(os.getenv("DB_PORT", "5432"))
-DB_NAME = os.getenv("DB_NAME", "railway")
-DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+# Railway fornece APENAS esta variável
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL não está definida!")
 
 
 def get_connection():
     """
-    Cria uma nova ligação à base de dados PostgreSQL.
+    Cria ligação ao PostgreSQL usando a DATABASE_URL do Railway.
     """
     try:
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-        )
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
         return conn
     except Exception as e:
-        # Log simples para debug no Railway
-        print(
-            "[DB] Erro ao conectar ao Postgres:",
-            f"host={DB_HOST} db={DB_NAME} user={DB_USER}",
-            f"erro={e}",
-        )
+        print("[DB] Erro ao conectar ao Postgres:", e)
         raise
 
 
-def execute_query(query: str, params: Tuple[Any, ...] | None = None):
+def execute_query(query, params=None):
     """
-    Executa um SELECT ou um INSERT/UPDATE com RETURNING,
-    devolvendo sempre uma lista de dicts (coluna -> valor).
+    Executa SELECT ou INSERT/UPDATE com RETURNING.
     """
     conn = None
     try:
         conn = get_connection()
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(query, params or ())
-            if cur.description:  # se for SELECT ou RETURNING
-                rows = cur.fetchall()
-            else:
-                rows = []
+        cur = conn.cursor()
+        cur.execute(query, params or ())
+        rows = cur.fetchall() if cur.description else []
         conn.commit()
+        cur.close()
         return rows
     except Exception as e:
         if conn:
@@ -62,22 +45,22 @@ def execute_query(query: str, params: Tuple[Any, ...] | None = None):
             conn.close()
 
 
-def execute_transaction(queries: List[Tuple[str, Tuple[Any, ...]]]):
+def execute_transaction(queries):
     """
-    Executa uma lista de comandos (query, params) numa única transacção.
-    Se der erro, faz rollback de tudo.
+    Executa várias queries numa transacção.
     """
     conn = None
     try:
         conn = get_connection()
-        with conn.cursor() as cur:
-            for sql, params in queries:
-                cur.execute(sql, params or ())
+        cur = conn.cursor()
+        for sql, params in queries:
+            cur.execute(sql, params or ())
         conn.commit()
+        cur.close()
     except Exception as e:
         if conn:
             conn.rollback()
-        print(f"[DB] Erro em execute_transaction: {e}")
+        print("[DB] Erro em execute_transaction:", e)
         raise
     finally:
         if conn:
