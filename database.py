@@ -4,14 +4,9 @@ from typing import List, Tuple, Any
 import psycopg2
 import psycopg2.extras
 
-# ---------------------------------------------
-# Configuração da base de dados
-# ---------------------------------------------
-
-# Railway injecta normalmente esta variável quando ligas o Postgres ao serviço
+# 👉 Lê a variável DATABASE_URL (se existir)
 DB_URL = os.getenv("DATABASE_URL")
 
-# Fallback para variáveis separadas (caso não exista DATABASE_URL)
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DB_NAME = os.getenv("DB_NAME", "railway")
@@ -20,14 +15,9 @@ DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
 
 def get_connection():
-    """
-    Cria uma nova ligação à base de dados PostgreSQL.
-    Dá prioridade a DATABASE_URL (formato completo do Railway).
-    """
     try:
         if DB_URL:
-            # Ex.: postgres://user:pass@host:port/dbname
-            print(f"[DB] A usar DATABASE_URL para conexão.")
+            print("[DB] A usar DATABASE_URL para conexão.")
             conn = psycopg2.connect(DB_URL)
         else:
             print(
@@ -49,7 +39,6 @@ def get_connection():
             f"erro={e}",
         )
         raise
-
 
 def execute_query(query: str, params: Tuple[Any, ...] | None = None):
     """
