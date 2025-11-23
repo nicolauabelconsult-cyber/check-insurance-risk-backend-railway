@@ -588,16 +588,17 @@ async def get_risk_history(
             detail="Erro interno ao obter histórico do assegurado",
         )
 
-
-# ✅ Criar utilizador principal automaticamente no arranque
+# ✅ Inicialização completa no arranque
 @app.on_event("startup")
-def ensure_default_user():
+def startup_tasks():
     try:
+        # 1) Garante que as tabelas existem
+        init_db_schema()
+        # 2) Garante que existe o utilizador principal
         seed_default_user()
     except Exception as e:
-        # Apenas regista o erro, não impede o arranque da API
-        print(f"[startup] Erro ao garantir utilizador padrão: {e}")
-
+        # Se alguma destas falhar, pelo menos vemos o erro nos logs
+        print(f"[startup] Erro durante inicialização: {e}")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
