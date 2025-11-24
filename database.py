@@ -1,19 +1,18 @@
-# database.py
 import os
 from typing import Any, List, Tuple
 
 import psycopg2
 import psycopg2.extras
 
-# Lê o DSN completo do Railway (postgres://user:pass@host:port/dbname)
+# ÚNICA variável usada para ligação à BD (configurada no Railway)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
 if not DATABASE_URL:
-    # Falha logo ao arrancar se a variável não existir
     raise RuntimeError(
         "DATABASE_URL não está definido. "
-        "No Railway, cria a variável DATABASE_URL = ${{ Postgres.DATABASE_URL }}."
+        "No Railway, na aba Variables do backend, cria:\n"
+        "DATABASE_URL = ${{ Postgres.DATABASE_URL }}."
     )
 
 
@@ -26,14 +25,16 @@ def get_connection():
         return conn
     except Exception as e:
         print(f"[DB] Erro ao conectar ao Postgres: {e}")
-        print(f"[DB] DATABASE_URL (oculto) está definido? "
-              f"{'SIM' if DATABASE_URL else 'NÃO'}")
+        print(
+            "[DB] DATABASE_URL está definido? -> "
+            f"{'SIM' if DATABASE_URL else 'NÃO'}"
+        )
         raise
 
 
 def execute_query(query: str, params: Tuple[Any, ...] | None = None):
     """
-    Executa SELECT ou INSERT/UPDATE com RETURNING.
+    Executa SELECT ou comandos com RETURNING.
     Devolve sempre uma lista de dicts (coluna -> valor).
     """
     conn = None
