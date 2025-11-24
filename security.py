@@ -22,7 +22,7 @@ async def get_current_user(
         if not users:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Usuário não encontrado",
+                detail="Utilizador não encontrado",
             )
         user = users[0]
         return UserInfo(
