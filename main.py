@@ -1,4 +1,4 @@
-"""Check Insurance Risk - Backend FastAPI (independente de plataforma)"""
+"""Check Insurance Risk - Backend FastAPI (Railway)"""
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -29,8 +29,7 @@ from models import (
 from reporting import export_to_excel, generate_dashboard_charts, generate_pdf_report
 from security import get_current_user, get_admin_user
 from utils import calculate_risk_score, normalize_country, perform_matching
-from seed_admin import seed_default_user  # ✅ único import correcto
-
+from seed_admin import seed_default_user
 
 app = FastAPI(
     title="Check Insurance Risk API",
@@ -45,6 +44,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def ensure_default_user():
+    try:
+        seed_default_user()
+    except Exception as e:
+        print(f"[startup] Erro ao garantir utilizador padrão: {e}")
 
 
 @app.get("/")
@@ -167,15 +174,15 @@ async def get_dashboard_stats(
         recent: List[RiskAnalysisInfo] = []
         for row in recent_rows:
             recent.append(
-                {
-                    "id": row["id"],
-                    "full_name": row.get("full_name"),
-                    "risk_level": row.get("risk_level"),
-                    "risk_score": row.get("risk_score"),
-                    "analyzed_at": row.get("analyzed_at"),
-                    "decision": row.get("decision"),
-                    "analyst_name": row.get("analyst_name"),
-                }
+                RiskAnalysisInfo(
+                    id=row["id"],
+                    full_name=row.get("full_name"),
+                    risk_level=row.get("risk_level"),
+                    risk_score=row.get("risk_score"),
+                    analyzed_at=row.get("analyzed_at"),
+                    decision=row.get("decision"),
+                    analyst_name=row.get("analyst_name"),
+                )
             )
 
         return {
@@ -297,34 +304,63 @@ async def upload_info_source(
     file: UploadFile = File(...),
     current_user: UserInfo = Depends(get_admin_user),
 ):
+    """
+    Upload de fonte de informação em EXCEL (.xlsx) ou CSV.
+    Sem suporte a PDF / URL por enquanto.
+    """
     import csv
+    from io import StringIO
+    from openpyxl import load_workbook
 
     try:
-        filename = file.filename or "arquivo.csv"
+        filename = file.filename or "fonte"
         content = await file.read()
-        try:
-            text = content.decode("utf-8")
-        except UnicodeDecodeError:
-            text = content.decode("latin-1")
 
-        sample = text.splitlines()[0] if text.splitlines() else ""
-        delimiter = ","
-        if ";" in sample and sample.count(";") > sample.count(","):
+        lower_name = filename.lower()
+        rows: list[dict] = []
+
+        if lower_name.endswith(".csv"):
+            text = content.decode("utf-8", errors="ignore")
+            sample = text.splitlines()[0] if text.splitlines() else ""
             delimiter = ";"
-        elif "\t" in sample:
-            delimiter = "\t"
+            if "," in sample and sample.count(",") >= sample.count(";"):
+                delimiter = ","
+            elif "\t" in sample:
+                delimiter = "\t"
+            reader = csv.DictReader(StringIO(text), delimiter=delimiter)
+            rows = list(reader)
 
-        reader = csv.DictReader(text.splitlines(), delimiter=delimiter)
+        elif lower_name.endswith(".xlsx"):
+            wb = load_workbook(io.BytesIO(content), read_only=True)
+            ws = wb.active
 
-        entities: List[Dict] = []
+            headers = [
+                str(cell.value).strip() if cell.value is not None else ""
+                for cell in next(ws.iter_rows(min_row=1, max_row=1))
+            ]
 
-        def pick(row, keys):
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                row_dict = {
+                    headers[i]: (str(row[i]).strip() if row[i] is not None else "")
+                    for i in range(len(headers))
+                }
+                rows.append(row_dict)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Tipo de ficheiro não suportado. Use .csv ou .xlsx",
+            )
+
+        def pick(d: dict, keys: list[str]) -> str | None:
             for k in keys:
-                if k in row and row[k]:
-                    return row[k].strip()
+                v = d.get(k)
+                if v:
+                    return str(v).strip()
             return None
 
-        for row in reader:
+        entities: list[dict] = []
+
+        for row in rows:
             full_name = pick(
                 row,
                 ["Nome", "NOME", "Full Name", "FULL_NAME", "full_name", "name", "Name"],
@@ -332,11 +368,26 @@ async def upload_info_source(
             nif = pick(row, ["NIF", "nif", "Tax ID", "tax_id", "NIF\ufeff"])
             position = pick(
                 row,
-                ["Cargo", "Função", "Funcao", "Position", "role", "ROLE", "Função/Cargo"],
+                [
+                    "Cargo",
+                    "Função",
+                    "Funcao",
+                    "Position",
+                    "role",
+                    "ROLE",
+                    "Função/Cargo",
+                ],
             )
             country_raw = pick(
                 row,
-                ["Nacionalidade", "Nationality", "País", "Pais", "Country", "country"],
+                [
+                    "Nacionalidade",
+                    "Nationality",
+                    "País",
+                    "Pais",
+                    "Country",
+                    "country",
+                ],
             )
 
             country = normalize_country(country_raw) if country_raw else None
@@ -357,17 +408,25 @@ async def upload_info_source(
         if not entities:
             raise HTTPException(
                 status_code=400,
-                detail="Nenhuma entidade válida encontrada no CSV",
+                detail="Nenhuma entidade válida encontrada no ficheiro",
             )
 
         src_rows = execute_query(
             """
-            INSERT INTO info_sources (name, source_type, file_type, num_records,
-                                      uploaded_at, uploaded_by, is_active)
+            INSERT INTO info_sources (
+                name, source_type, file_type, num_records,
+                uploaded_at, uploaded_by, is_active
+            )
             VALUES (%s, %s, %s, %s, NOW(), %s, true)
             RETURNING id
             """,
-            (name, source_type.value, "CSV", len(entities), current_user.id),
+            (
+                name,
+                source_type.value,
+                "EXCEL" if lower_name.endswith(".xlsx") else "CSV",
+                len(entities),
+                current_user.id,
+            ),
         )
         source_id = src_rows[0]["id"]
 
@@ -379,7 +438,8 @@ async def upload_info_source(
                     INSERT INTO normalized_entities (
                         full_name, nif, passport, resident_card,
                         position, country, additional_info, source_id
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         ent.get("full_name"),
@@ -405,7 +465,7 @@ async def upload_info_source(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Erro upload fonte: {e}")
+        print(f"Erro upload fonte (Excel/CSV): {e}")
         raise HTTPException(
             status_code=500,
             detail="Erro interno ao processar fonte de informação",
@@ -427,16 +487,13 @@ async def download_risk_pdf(
 
         risk_record = records[0]
         pdf_info = generate_pdf_report(risk_record)
-        if isinstance(pdf_info, dict) and pdf_info.get("error"):
-            raise HTTPException(status_code=500, detail=pdf_info["error"])
-
         pdf_bytes = base64.b64decode(pdf_info["data"])
         filename = pdf_info.get("filename", f"risk_report_{risk_id}.pdf")
 
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename=\"{filename}\"'},
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
     except HTTPException:
@@ -460,9 +517,6 @@ async def export_risk_excel(
         )
 
         excel_info = export_to_excel(records)
-        if isinstance(excel_info, dict) and excel_info.get("error"):
-            raise HTTPException(status_code=500, detail=excel_info["error"])
-
         excel_bytes = base64.b64decode(excel_info["data"])
         filename = excel_info.get(
             "filename",
@@ -471,10 +525,8 @@ async def export_risk_excel(
 
         return StreamingResponse(
             io.BytesIO(excel_bytes),
-            media_type=(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
-            headers={"Content-Disposition": f'attachment; filename=\"{filename}\"'},
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
     except HTTPException:
@@ -490,11 +542,7 @@ async def get_charts(
 ):
     try:
         chart_info = generate_dashboard_charts()
-        if isinstance(chart_info, dict) and chart_info.get("error"):
-            raise HTTPException(status_code=500, detail=chart_info["error"])
         return chart_info
-    except HTTPException:
-        raise
     except Exception as e:
         print(f"Erro ao gerar gráficos: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao gerar gráficos")
@@ -588,17 +636,6 @@ async def get_risk_history(
             detail="Erro interno ao obter histórico do assegurado",
         )
 
-# ✅ Inicialização completa no arranque
-@app.on_event("startup")
-def startup_tasks():
-    try:
-        # 1) Garante que as tabelas existem
-        init_db_schema()
-        # 2) Garante que existe o utilizador principal
-        seed_default_user()
-    except Exception as e:
-        # Se alguma destas falhar, pelo menos vemos o erro nos logs
-        print(f"[startup] Erro durante inicialização: {e}")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
