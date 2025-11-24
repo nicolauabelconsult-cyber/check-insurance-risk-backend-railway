@@ -1,7 +1,6 @@
-# seed_admin.py
 """
 Cria automaticamente o utilizador principal caso ele não exista.
-Utilizador principal: nicolauabel.consult@gmail.com / Qwerty080397
+Utilizador: nicolauabel.consult@gmail.com / Qwerty080397
 """
 
 from database import execute_query
@@ -13,9 +12,6 @@ def seed_default_user():
     username = "nicolauabel"
     plain_password = "Qwerty080397"
 
-    # Gerar hash seguro
-    hashed_password = get_password_hash(plain_password)
-
     # Verificar se já existe
     rows = execute_query(
         "SELECT id FROM users WHERE email = %s OR username = %s",
@@ -26,7 +22,8 @@ def seed_default_user():
         print("[SEED] Utilizador principal já existe.")
         return
 
-    # Criar novo utilizador principal
+    hashed_password = get_password_hash(plain_password)
+
     execute_query(
         """
         INSERT INTO users (username, email, password_hash, role, is_active, created_at)
