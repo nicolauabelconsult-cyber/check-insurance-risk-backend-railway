@@ -9,7 +9,7 @@ from reportlab.pdfgen import canvas
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from .models import RiskRecord
+from models import RiskRecord
 
 
 def generate_risk_pdf(db: Session, risk: RiskRecord) -> StreamingResponse:
