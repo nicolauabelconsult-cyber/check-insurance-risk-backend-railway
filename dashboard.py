@@ -5,10 +5,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .auth import get_current_active_user
-from .database import get_db
-from .models import RiskRecord, RiskLevel, User
-from .schemas import DashboardStats, RiskHistoryItem
+from auth import get_current_active_user
+from database import get_db
+from models import RiskRecord, RiskLevel, User
+from schemas import DashboardStats, RiskHistoryItem
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
