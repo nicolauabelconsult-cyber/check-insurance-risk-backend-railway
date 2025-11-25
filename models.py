@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import Enum
+from typing import Optional  # 👈 ADICIONA ISTO (podes pôr também List se quiseres)
 
 from sqlalchemy import (
     Integer,
@@ -13,7 +14,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
-
 
 class UserRole(str, Enum):
     ADMIN = "ADMIN"
@@ -49,21 +49,17 @@ class User(Base):
 class InfoSource(Base):
     __tablename__ = "info_sources"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(255))
-    source_type: Mapped[str] = mapped_column(String(50))  # PEP, FRAUD, etc.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    record_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_import_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime, default=None, nullable=True
-    )
+    records_count: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    created_by_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("users.id"), nullable=True
-    )
+    created_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     created_by = relationship("User")
+    entities = relationship("NormalizedEntity", back_populates="source")
 
 
 class NormalizedEntity(Base):
