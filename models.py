@@ -1,18 +1,37 @@
 from datetime import datetime
-from typing import Optional
+from enum import Enum  # 👈 ESTE IMPORT É O QUE FALTAVA
 
 from sqlalchemy import (
     Column,
     Integer,
     String,
     DateTime,
+    Boolean,
     ForeignKey,
     Text,
     JSON,
 )
-from sqlalchemy.orm import relationship, Mapped, mapped_column
+from sqlalchemy.orm import relationship
 
 from database import Base
+
+class UserRole(str, Enum):
+    ADMIN = "ADMIN"
+    ANALYST = "ANALYST"
+
+
+class RiskLevel(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class RiskDecision(str, Enum):
+    APPROVED = "APROVADO"
+    REJECTED = "REJEITADO"
+    UNDER_INVESTIGATION = "SOB_INVESTIGACAO"
+
 
 class User(Base):
     __tablename__ = "users"
