@@ -1,0 +1,38 @@
+from io import BytesIO
+from typing import List, Dict
+
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from openpyxl import Workbook
+
+
+def generate_risk_pdf(report_data: Dict) -> bytes:
+    """
+    report_data deve ser compatível com RiskDetailResponse (dict).
+    """
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    y = height - 40
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(40, y, "RELATÓRIO DE ANÁLISE DE RISCO – CLIENTE / ASSEGURADO")
+    y -= 30
+
+    c.setFont("Helvetica", 10)
+    c.drawString(40, y, f"ID Análise: {report_data.get('id')}")
+    y -= 15
+    c.drawString(40, y, f"Data: {report_data.get('data_analise')}")
+    y -= 25
+
+    # Resumo rápido
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(40, y, "Resumo Rápido")
+    y -= 20
+    c.setFont("Helvetica", 10)
+    c.drawString(40, y, f"Score: {report_data.get('score')}")
+    y -= 15
+    c.drawString(40, y, f"Nível: {report_data.get('nivel')}")
+    y -= 15
+    c.drawString(40, y, f"Decisão: {report_data.get('decisao')}")
+    y -=
