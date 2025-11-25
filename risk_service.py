@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
 from app import models
-from app.config import settings
-from app.utils import normalize_text, normalize_id, simple_similarity, classify_level
+from config import settings
+from utils import normalize_text, normalize_id, simple_similarity, classify_level
 
 
 def _adjust_by_country(country_code: str | None) -> int:
