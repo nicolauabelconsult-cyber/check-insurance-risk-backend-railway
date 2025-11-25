@@ -7,10 +7,10 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
-from app.config import settings
-from app.database import get_db
+from config import settings
+from database import get_db
 from app import models
-from app.schemas import TokenData
+from schemas import TokenData
 
 SECRET_KEY = os.getenv("AUTH_SECRET", settings.AUTH_SECRET)
 ALGORITHM = "HS256"
