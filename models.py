@@ -126,3 +126,20 @@ class RiskMatch(Base):
 
     risk_record = relationship("RiskRecord", backref="matches")
     entity = relationship("NormalizedEntity")
+    
+class UserRole(str, Enum):
+    ADMIN = "ADMIN"
+    ANALYST = "ANALYST"
+
+
+class RiskLevel(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class RiskDecision(str, Enum):
+    APPROVED = "APROVADO"
+    REJECTED = "REJEITADO"
+    UNDER_INVESTIGATION = "SOB_INVESTIGACAO"
