@@ -1,20 +1,14 @@
-# app/main.py
-from fastapi import FastAPI, Depends, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-
-from .config import settings
-from .database import Base, engine, get_db
-from .models import RiskRecord, RiskLevel, RiskDecision, NormalizedEntity, RiskAlert, User
-from .auth import router as auth_router, get_current_active_user, get_current_admin
-from .risk_engine import (
+from config import settings
+from database import Base, engine, get_db
+from models import RiskRecord, RiskLevel, RiskDecision, NormalizedEntity, RiskAlert, User
+from auth import router as auth_router, get_current_active_user, get_current_admin
+from risk_engine import (
     find_candidates,
     calculate_match_score,
     aggregate_matches,
     base_level_from_score,
 )
-from .schemas import (
+from schemas import (
     RiskCheckRequest,
     RiskCheckResponse,
     MatchResult,
@@ -26,11 +20,10 @@ from .schemas import (
     FonteInfo,
     HistoricoClienteItem,
 )
-from .reporting import generate_risk_pdf, export_risk_excel
-from .info_sources import router as info_sources_router
-from .dashboard import router as dashboard_router
-from .seed_admin import seed_default_admin
-
+from reporting import generate_risk_pdf, export_risk_excel
+from info_sources import router as info_sources_router
+from dashboard import router as dashboard_router
+from seed_admin import seed_default_admin
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
