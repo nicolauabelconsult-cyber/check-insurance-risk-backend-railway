@@ -11,6 +11,9 @@ passlib[bcrypt]
 python-jose[cryptography]
 email-validator
 
+pydantic>=2.8.0,<2.10.0
+pydantic-settings>=2.4.0,<2.5.0
+
 openpyxl
 reportlab
 xlsxwriter
