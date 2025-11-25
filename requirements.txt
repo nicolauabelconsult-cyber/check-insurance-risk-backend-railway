@@ -7,7 +7,3 @@ python-dotenv==1.0.0
 openpyxl==3.1.2
 reportlab==4.0.8
 matplotlib==3.8.2
-
-# Autenticação / JWT – versão SEM Rust
-python-jose==3.3.0
-passlib==1.7.4
