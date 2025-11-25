@@ -1,8 +1,7 @@
 from datetime import datetime
-from enum import Enum  # 👈 ESTE IMPORT É O QUE FALTAVA
+from enum import Enum
 
 from sqlalchemy import (
-    Column,
     Integer,
     String,
     DateTime,
@@ -11,9 +10,10 @@ from sqlalchemy import (
     Text,
     JSON,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+
 
 class UserRole(str, Enum):
     ADMIN = "ADMIN"
