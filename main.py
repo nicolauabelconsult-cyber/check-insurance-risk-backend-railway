@@ -57,6 +57,8 @@ def startup_event():
 
 # ------------- RISK ENDPOINTS -------------
 
+# ------------- RISK ENDPOINTS -------------
+
 
 @app.post(f"{settings.API_PREFIX}/risk/check", response_model=RiskCheckResponse)
 def risk_check(
@@ -90,10 +92,12 @@ def risk_check(
     else:
         # Sem matches, score baixo
         score = 10
-        explanation_global.append("Nenhuma correspondência encontrada em bases PEP/Fraude/Sinistros/Sanções.")
+        explanation_global.append(
+            "Nenhuma correspondência encontrada em bases PEP/Fraude/Sinistros/Sanções."
+        )
 
     # 2. Agregar matches
-    matches_objects = []
+    matches_objects: list[MatchResult] = []
     if entities_with_scores:
         aggregated = aggregate_matches(entities_with_scores)
         for item in aggregated:
@@ -108,16 +112,16 @@ def risk_check(
                 )
             )
         # Score global = máximo dos matches
-        score_global = max(m["score"] for m in matches_objects)
+        score_global = max(m.score for m in matches_objects)
         explanation_global = ["Matches encontrados em bases de alto risco."]
     else:
         score_global = 10
 
     level_global = base_level_from_score(score_global)
-    decision_suggested = RiskDecision.UNDER_INVESTIGATION if level_global in [
-        RiskLevel.HIGH,
-        RiskLevel.CRITICAL,
-    ] else RiskDecision.APPROVED
+    if level_global in [RiskLevel.HIGH, RiskLevel.CRITICAL]:
+        decision_suggested = RiskDecision.UNDER_INVESTIGATION
+    else:
+        decision_suggested = RiskDecision.APPROVED
 
     # 3. Gravar registo de risco
     record = RiskRecord(
@@ -145,7 +149,6 @@ def risk_check(
         matches=matches_objects,
     )
 
-
 @app.post(f"{settings.API_PREFIX}/risk/confirm-match")
 def confirm_match(
     payload: ConfirmMatchRequest,
@@ -156,17 +159,20 @@ def confirm_match(
     if not record:
         raise HTTPException(status_code=404, detail="Análise não encontrada.")
 
-    # match_id é apenas índice na lista; aqui vamos assumir que 1º candidato é o verdadeiro.
+    # TODO: mapear correctamente match_id -> entidade. Por agora, simplificado.
     entity = (
         db.query(NormalizedEntity)
-        .join(RiskRecord, isouter=True)
         .first()
-    )  # simplificação – podes ajustar para mapear match_id -> entity
+    )
 
     record.decision = payload.final_decision.value
     record.decision_notes = payload.notes
     if entity:
         record.confirmed_entity_id = entity.id
+
+    db.commit()
+    return {"message": "Match confirmado e decisão registada."}
+
 
     # Criar alertas básicos
    @app.post(f"{settings.API_PREFIX}/risk/confirm-match")
