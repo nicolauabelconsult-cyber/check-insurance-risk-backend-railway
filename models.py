@@ -136,7 +136,20 @@ class RiskMatch(Base):
 
     risk_record = relationship("RiskRecord", backref="matches")
     entity = relationship("NormalizedEntity")
-    
+
+class RiskAlert(Base):
+    __tablename__ = "risk_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    risk_record_id: Mapped[int] = mapped_column(
+        ForeignKey("risk_records.id"), nullable=False
+    )
+    type: Mapped[str] = mapped_column(String(50), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    risk_record = relationship("RiskRecord", back_populates="alerts")
+
 class UserRole(str, Enum):
     ADMIN = "ADMIN"
     ANALYST = "ANALYST"
