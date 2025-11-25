@@ -1,5 +1,6 @@
 """
-Módulo de autenticação – versão argon2
+Módulo de autenticação – versão simples (sem Rust)
+Usa passlib com sha256_crypt (puro Python, sem argon2 / bcrypt / Rust)
 """
 
 import os
@@ -15,9 +16,9 @@ SECRET_KEY = os.getenv("AUTH_SECRET", "your-secret-key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 12
 
-# Usar ARGON2 em vez de bcrypt
+# ✅ Usar apenas sha256_crypt (não precisa de bcrypt nem argon2)
 pwd_context = CryptContext(
-    schemes=["argon2"],
+    schemes=["sha256_crypt"],
     deprecated="auto",
 )
 
@@ -31,7 +32,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     """
-    Gera um hash seguro da palavra-passe (argon2).
+    Gera um hash seguro da palavra-passe (sha256_crypt).
     """
     return pwd_context.hash(password)
 
