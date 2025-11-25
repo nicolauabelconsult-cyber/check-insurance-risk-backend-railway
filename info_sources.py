@@ -5,11 +5,11 @@ import pandas as pd
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from .auth import get_current_admin
-from .database import get_db
-from .models import InfoSource, NormalizedEntity, User
-from .schemas import InfoSourceRead
-from .risk_engine import normalize_text, RISK_WEIGHTS
+from auth import get_current_admin
+from database import get_db
+from models import InfoSource, NormalizedEntity, User
+from schemas import InfoSourceRead
+from risk_engine import normalize_text, RISK_WEIGHTS
 
 router = APIRouter(prefix="/info-sources", tags=["info-sources"])
 
