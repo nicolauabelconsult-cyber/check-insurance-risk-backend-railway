@@ -91,39 +91,33 @@ class NormalizedEntity(Base):
 class RiskRecord(Base):
     __tablename__ = "risk_records"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # dados de entrada
-    full_name: Mapped[str] = mapped_column(Text)
-    full_name_norm: Mapped[str] = mapped_column(Text, index=True)
-    nif: Mapped[Optional[str]] = mapped_column(String(100), index=True, nullable=True)
-    passport: Mapped[Optional[str]] = mapped_column(String(100), index=True, nullable=True)
-    resident_card: Mapped[Optional[str]] = mapped_column(
-        String(100), index=True, nullable=True
-    )
-    country_code: Mapped[Optional[str]] = mapped_column(String(3), nullable=True)
+    full_name: Mapped[str] = mapped_column(String(255))
+    nif: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    passport: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    resident_card: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(3), nullable=True)
 
-    # resultado
     score: Mapped[int] = mapped_column(Integer)
-    level: Mapped[str] = mapped_column(String(20))  # LOW/MEDIUM/HIGH/CRITICAL
-    decision: Mapped[Optional[str]] = mapped_column(
-        String(30), default="PENDING"
-    )  # APROVADO, REJEITADO, SOB_INVESTIGACAO
+    level: Mapped[str] = mapped_column(String(20))      # usa RiskLevel.value
+    decision: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    decision_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    explanation: Mapped[Optional[dict]] = mapped_column(
-        JSON, nullable=True
-    )  # lista de fatores
-    sources_summary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    relations_summary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    explanation: Mapped[Optional[JSON]] = mapped_column(JSON, nullable=True)
 
-    analyst_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("users.id"), nullable=True
+    confirmed_entity_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("normalized_entities.id"), nullable=True
     )
-    analyst = relationship("User")
+    analyst_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+
+    analyst = relationship("User", back_populates="risk_records")
+    confirmed_entity = relationship("NormalizedEntity")
+    alerts = relationship("RiskAlert", back_populates="risk_record")  # 👈 importante
 
 
 class RiskMatch(Base):
