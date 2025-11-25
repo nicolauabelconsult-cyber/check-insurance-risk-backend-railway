@@ -233,3 +233,29 @@ def get_dashboard_stats(db: Session) -> Dict:
         "tempo_medio_analise_segundos": avg_time,
         "ultimas_analises": results,
     }
+
+class RiskRecord(Base):
+    __tablename__ = "risk_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    full_name = Column(String(255), nullable=False)
+    nif = Column(String(100), nullable=True)
+    passport = Column(String(100), nullable=True)
+    resident_card = Column(String(100), nullable=True)
+    country = Column(String(3), nullable=True)
+
+    score = Column(Integer, nullable=False)
+    level = Column(String(20), nullable=False)          # <- usa RiskLevel.value
+    decision = Column(String(50), nullable=True)        # <- usa RiskDecision.value
+    decision_notes = Column(Text, nullable=True)
+    explanation = Column(JSON, nullable=True)
+
+    confirmed_entity_id = Column(Integer, ForeignKey("normalized_entities.id"), nullable=True)
+    analyst_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    analyst = relationship("User", back_populates="risk_records")
+    confirmed_entity = relationship("NormalizedEntity")
+    alerts = relationship("RiskAlert", back_populates="risk_record")
