@@ -1,22 +1,27 @@
+# auth.py
 from datetime import datetime, timedelta
-import os
 from typing import Optional
 
-from fastapi import HTTPException, status, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from config import settings
 from database import get_db
-from app import models
-from schemas import TokenData
+from models import User, UserRole
+from schemas import Token, TokenData, LoginRequest, UserRead
 
-SECRET_KEY = os.getenv("AUTH_SECRET", settings.AUTH_SECRET)
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_HOURS = settings.ACCESS_TOKEN_EXPIRE_HOURS
+
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+
+# ----------------- UTILITÁRIOS DE PASSWORD -----------------
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -27,64 +32,107 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(data: dict, expires_delta_hours: int = ACCESS_TOKEN_EXPIRE_HOURS) -> str:
+# ----------------- JWT -----------------
+
+
+def create_access_token(
+    data: dict, expires_delta: Optional[timedelta] = None
+) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(hours=expires_delta_hours)
+    expire = datetime.utcnow() + (
+        expires_delta or timedelta(hours=settings.ACCESS_TOKEN_EXPIRE_HOURS)
+    )
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(
+        to_encode,
+        settings.AUTH_SECRET,
+        algorithm=settings.AUTH_ALGORITHM,
+    )
+    return encoded_jwt
 
 
-def decode_token(token: str) -> TokenData:
+def get_user_by_username(db: Session, username: str) -> Optional[User]:
+    return db.query(User).filter(User.username == username).first()
+
+
+def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
+    user = get_user_by_username(db, username)
+    if not user or not user.is_active:
+        return None
+    if not verify_password(password, user.hashed_password):
+        return None
+    return user
+
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Credenciais inválidas ou sessão expirada.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.AUTH_SECRET,
+            algorithms=[settings.AUTH_ALGORITHM],
+        )
         username: str = payload.get("sub")
-        role: str = payload.get("role", "ANALYST")
-        if username is None:
-            raise JWTError("Missing username")
-        return TokenData(username=username, role=role)
+        role: str = payload.get("role")
+        if username is None or role is None:
+            raise credentials_exception
+        _ = TokenData(username=username, role=UserRole(role))
     except JWTError:
+        raise credentials_exception
+
+    user = get_user_by_username(db, username)  # type: ignore[name-defined]
+    if user is None:
+        raise credentials_exception
+    return user
+
+
+async def get_current_active_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    if not current_user.is_active:
+        raise HTTPException(status_code=400, detail="Utilizador inactivo.")
+    return current_user
+
+
+async def get_current_admin(
+    current_user: User = Depends(get_current_active_user),
+) -> User:
+    if current_user.role != UserRole.ADMIN.value:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido ou expirado",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=403,
+            detail="Apenas administradores podem aceder.",
+        )
+    return current_user
+
+
+# ----------------- ROTAS -----------------
+
+
+@router.post("/login", response_model=Token)
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Username ou password inválidos.",
         )
 
-
-def authenticate_user(db: Session, username: str, password: str) -> Optional[models.User]:
-    user = db.query(models.User).filter(
-        (models.User.username == username) | (models.User.email == username)
-    ).first()
-    if not user:
-        return None
-    if not verify_password(password, user.password_hash):
-        return None
-    return user
+    access_token = create_access_token(
+        data={"sub": user.username, "role": user.role},
+    )
+    return Token(access_token=access_token, role=user.role)
 
 
-def get_current_user(
-    db: Session = Depends(get_db), token: str = Depends(lambda authorization: authorization)
-):
-    # Token virá via Header Authorization: Bearer <token>
-    from fastapi import Header
-
-    auth_header: str = Header(default=None, alias="Authorization")  # type: ignore
-
-    if not auth_header:
-        raise HTTPException(status_code=401, detail="Credenciais não fornecidas")
-
-    scheme, _, token = auth_header.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(status_code=401, detail="Formato de token inválido")
-
-    token_data = decode_token(token)
-    user = db.query(models.User).filter(models.User.username == token_data.username).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Utilizador não encontrado")
-
-    return user
-
-
-def require_admin(user: models.User = Depends(get_current_user)) -> models.User:
-    if user.role != "ADMIN":
-        raise HTTPException(status_code=403, detail="Acesso restrito a administradores")
-    return user
+@router.get("/me", response_model=UserRead)
+def read_me(current_user: User = Depends(get_current_active_user)):
+    return current_user
