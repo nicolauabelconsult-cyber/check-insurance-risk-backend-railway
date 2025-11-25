@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Optional  # 👈 ADICIONA ISTO (podes pôr também List se quiseres)
+from typing import Optional
 
 from sqlalchemy import (
     Integer,
