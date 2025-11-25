@@ -1,18 +1,16 @@
-fastapi==0.111.0
-uvicorn[standard]==0.30.0
-python-dotenv==1.0.1
+fastapi
+uvicorn[standard]
 
-SQLAlchemy==2.0.30
-psycopg2-binary==2.9.9
+SQLAlchemy>=2.0.31,<2.1.0
+psycopg2-binary>=2.9.10
 
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+python-dotenv
+python-multipart
 
-pydantic==2.8.2
-pydantic-settings==2.4.0
+passlib[bcrypt]
+python-jose[cryptography]
+email-validator
 
-openpyxl==3.1.5
-reportlab==4.2.0
-
-python-multipart==0.0.9
-email-validator==2.1.1   # 👈 ADICIONA ISTO
+openpyxl
+reportlab
+xlsxwriter
