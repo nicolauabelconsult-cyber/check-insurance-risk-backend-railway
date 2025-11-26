@@ -10,3 +10,4 @@ jinja2
 reportlab
 pandas
 psycopg2-binary
+email-validator
