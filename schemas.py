@@ -297,3 +297,20 @@ class RiskDetailResponse(BaseModel):
     factors: List[str] = []               # lista de factores/motivos
     candidates: List[CandidateMatch] = [] # candidatos considerados
     history: List[RiskHistoryItem] = []   # histórico associado (se usado)
+
+class FonteInfo(BaseModel):
+    """
+    Informação sobre a fonte de dados (InfoSource).
+    Ajusta os nomes dos campos conforme a tua tabela/models.InfoSource.
+    """
+    id: Optional[int] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    source_type: Optional[str] = None  # ex.: 'INTERNA', 'PEP', 'SANCTIONS'
+    country: Optional[str] = None
+    url: Optional[str] = None
+    last_updated: Optional[datetime] = None
+    total_records: Optional[int] = None
+
+    # Permite criar a partir de modelos SQLAlchemy e ignora campos extra
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
