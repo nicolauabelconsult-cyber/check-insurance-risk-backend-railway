@@ -8,4 +8,4 @@ passlib[bcrypt]
 python-jose
 jinja2
 reportlab
-pandas   <-- ADICIONAR
+pandas
