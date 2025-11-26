@@ -111,3 +111,33 @@ class MatchResult(BaseModel):
 class ConfirmMatchRequest(BaseModel):
     risk_record_id: int
     chosen_candidate_id: Optional[int] = None
+
+class RiskHistoryItem(BaseModel):
+    """
+    Um registo individual de histórico de risco.
+    Campos alinhados, de forma genérica, com o modelo RiskRecord.
+    Todos opcionais para evitar erros de validação.
+    """
+    id: Optional[int] = None
+    name: Optional[str] = None
+    nif: Optional[str] = None
+    passport: Optional[str] = None
+    resident_card: Optional[str] = None
+    risk_level: Optional[str] = None
+    risk_score: Optional[float] = None
+    created_at: Optional[datetime] = None
+
+    # Permite criar directamente a partir do modelo SQLAlchemy, se usado
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RiskHistoryResponse(BaseModel):
+    """
+    Resposta do endpoint de histórico de risco.
+
+    Deixamos tudo opcional / com default para ser compatível
+    com praticamente qualquer dict que o main.py devolva.
+    """
+    identifier: Optional[str] = None
+    history: List[RiskHistoryItem] = []
+    total: Optional[int] = None
