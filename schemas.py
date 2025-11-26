@@ -141,3 +141,18 @@ class RiskHistoryResponse(BaseModel):
     identifier: Optional[str] = None
     history: List[RiskHistoryItem] = []
     total: Optional[int] = None
+
+class RiskDetailResponse(BaseModel):
+    """
+    Detalhe de uma análise de risco específica.
+
+    Campos todos opcionais / com default, para ser compatível
+    com quase qualquer forma de retorno do main.py.
+    """
+    id: Optional[int] = None              # id do RiskRecord, se existir
+    request: Optional[RiskCheckRequest] = None  # dados de entrada da análise
+    score: Optional[float] = None         # score calculado (0–100)
+    level: Optional[str] = None           # nível de risco ("LOW", "MEDIUM", "HIGH", etc.)
+    factors: List[str] = []               # lista de factores/motivos
+    candidates: List[CandidateMatch] = [] # candidatos considerados
+    history: List[RiskHistoryItem] = []   # histórico associado (se usado)
