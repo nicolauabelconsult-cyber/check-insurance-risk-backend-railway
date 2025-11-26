@@ -9,5 +9,6 @@ python-jose
 jinja2
 reportlab
 pandas
+openpyxl
 psycopg2-binary
 email-validator
