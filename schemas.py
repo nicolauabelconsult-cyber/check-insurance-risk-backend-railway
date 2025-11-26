@@ -1,7 +1,8 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
+
 
 
 # -------------------------
@@ -50,4 +51,34 @@ class RiskCheckRequest(BaseModel):
     passport: Optional[str] = None
     resident_card: Optional[str] = None
     nationality: Optional[str] = None
+
+class CandidateMatch(BaseModel):
+    """
+    Representa um candidato devolvido pelo motor de risco.
+    Campos alinhados com o risk_engine.find_candidates / aggregate_matches.
+    """
+    id: Optional[int] = None
+    name: Optional[str] = None
+    normalized_name: Optional[str] = None
+    nif: Optional[str] = None
+    passport: Optional[str] = None
+    resident_card: Optional[str] = None
+    country: Optional[str] = None
+    info_source_id: Optional[int] = None
+    match_score: Optional[float] = None
+
+class RiskCheckResponse(BaseModel):
+    """
+    Resposta padrão do endpoint de análise de risco.
+
+    Compatível com o que o risk_engine.analyze_risk_request devolve:
+    - score: float (0–100)
+    - level: string (ex.: "LOW", "MEDIUM", "HIGH")
+    - factors: lista de motivos / factores de risco
+    - candidates: lista de candidatos potenciais
+    """
+    score: float
+    level: str
+    factors: List[str] = []
+    candidates: List[CandidateMatch] = []
 
