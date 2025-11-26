@@ -3,8 +3,6 @@ from typing import Optional, List
 
 from pydantic import BaseModel, EmailStr, ConfigDict
 
-
-
 # -------------------------
 # MODELOS DE AUTENTICAÇÃO
 # -------------------------
@@ -52,6 +50,21 @@ class RiskCheckRequest(BaseModel):
     resident_card: Optional[str] = None
     nationality: Optional[str] = None
 
+class ClienteInfo(BaseModel):
+    """
+    Informação básica sobre o cliente / assegurado.
+    Campos todos opcionais para ser tolerante a diferentes usos no main.py.
+    """
+    name: Optional[str] = None
+    nif: Optional[str] = None
+    passport: Optional[str] = None
+    resident_card: Optional[str] = None
+    nationality: Optional[str] = None
+    other_id: Optional[str] = None  # caso uses algum outro identificador
+
+    # Ignora campos extra que possam vir do código ou do frontend
+    model_config = ConfigDict(extra="ignore")
+
 class CandidateMatch(BaseModel):
     """
     Representa um candidato devolvido pelo motor de risco.
@@ -67,20 +80,27 @@ class CandidateMatch(BaseModel):
     info_source_id: Optional[int] = None
     match_score: Optional[float] = None
 
-class RiskCheckResponse(BaseModel):
+class RiskDetailResponse(BaseModel):
     """
-    Resposta padrão do endpoint de análise de risco.
+    Detalhe de uma análise de risco específica.
 
-    Compatível com o que o risk_engine.analyze_risk_request devolve:
-    - score: float (0–100)
-    - level: string (ex.: "LOW", "MEDIUM", "HIGH")
-    - factors: lista de motivos / factores de risco
-    - candidates: lista de candidatos potenciais
+    Compatível com a estrutura típica:
+    - id: id do registo de risco
+    - cliente: informação do cliente (ClienteInfo)
+    - score: score de risco
+    - level: nível de risco
+    - factors: lista de factores
+    - candidates: candidatos considerados
+    - history: histórico associado
     """
-    score: float
-    level: str
+    id: Optional[int] = None
+    cliente: Optional[ClienteInfo] = None
+    request: Optional[RiskCheckRequest] = None
+    score: Optional[float] = None
+    level: Optional[str] = None
     factors: List[str] = []
     candidates: List[CandidateMatch] = []
+    history: List[RiskHistoryItem] = []
 
 class MatchResult(BaseModel):
     """
