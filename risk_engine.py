@@ -380,3 +380,23 @@ def aggregate_matches(*args, **kwargs):
 
     return aggregated[:top_n]
 
+def base_level_from_score(score: float) -> RiskLevel:
+    """
+    Converte um score numérico (0–100) num nível de risco base.
+
+    Esta função é usada pelo main.py para decidir o nível de risco
+    sem duplicar a lógica em vários sítios.
+    """
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        s = 0.0
+
+    if s >= 80:
+        return RiskLevel.HIGH
+    elif s >= 40:
+        return RiskLevel.MEDIUM
+    else:
+        return RiskLevel.LOW
+
+
