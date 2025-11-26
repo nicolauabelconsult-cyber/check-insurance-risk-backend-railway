@@ -65,10 +65,63 @@ class ClienteInfo(BaseModel):
     # Ignora campos extra que possam vir do código ou do frontend
     model_config = ConfigDict(extra="ignore")
 
+from datetime import datetime
+from typing import Optional, List
+
+from pydantic import BaseModel, EmailStr, ConfigDict
+
+# -------------------------------------------------------
+# AUTENTICAÇÃO
+# -------------------------------------------------------
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class TokenData(BaseModel):
+    username: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+# -------------------------------------------------------
+# UTILIZADOR
+# -------------------------------------------------------
+
+class UserRead(BaseModel):
+    id: int
+    username: str
+    email: Optional[EmailStr] = None
+    full_name: Optional[str] = None
+    role: str
+    is_active: bool
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# -------------------------------------------------------
+# RISCO – REQUEST / CANDIDATOS / RESPONSE
+# -------------------------------------------------------
+
+class RiskCheckRequest(BaseModel):
+    """
+    Payload principal para o endpoint de análise de risco.
+    """
+    name: str
+    nif: Optional[str] = None
+    passport: Optional[str] = None
+    resident_card: Optional[str] = None
+    nationality: Optional[str] = None
+
+
 class CandidateMatch(BaseModel):
     """
     Representa um candidato devolvido pelo motor de risco.
-    Campos alinhados com o risk_engine.find_candidates / aggregate_matches.
     """
     id: Optional[int] = None
     name: Optional[str] = None
@@ -79,6 +132,74 @@ class CandidateMatch(BaseModel):
     country: Optional[str] = None
     info_source_id: Optional[int] = None
     match_score: Optional[float] = None
+
+
+class RiskCheckResponse(BaseModel):
+    """
+    Resposta padrão do endpoint de análise de risco.
+    """
+    score: float
+    level: str
+    factors: List[str] = []
+    candidates: List[CandidateMatch] = []
+
+
+# -------------------------------------------------------
+# HISTÓRICO DE RISCO
+# -------------------------------------------------------
+
+class RiskHistoryItem(BaseModel):
+    """
+    Um item do histórico de análises de risco de um cliente.
+    Ajusta os campos conforme a tua tabela RiskRecord.
+    """
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    score: Optional[float] = None
+    level: Optional[str] = None
+    notes: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class RiskHistoryResponse(BaseModel):
+    """
+    Resposta para endpoint que devolve histórico de um identificador.
+    """
+    identifier: str
+    history: List[RiskHistoryItem] = []
+
+
+# -------------------------------------------------------
+# DETALHE DO CLIENTE / ANÁLISE
+# -------------------------------------------------------
+
+class ClienteInfo(BaseModel):
+    """
+    Informação básica sobre o cliente / segurado.
+    """
+    name: Optional[str] = None
+    nif: Optional[str] = None
+    passport: Optional[str] = None
+    resident_card: Optional[str] = None
+    nationality: Optional[str] = None
+    other_id: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+class RiskDetailResponse(BaseModel):
+    """
+    Detalhe completo de uma análise de risco.
+    Compatível com o main.py para ver detalhe de um RiskRecord.
+    """
+    id: Optional[int] = None
+    cliente: Optional[ClienteInfo] = None
+    request: Optional[RiskCheckRequest] = None
+    score: Optional[float] = None
+    level: Optional[str] = None
+    factors: List[str] = []
+    candidates: List[CandidateMatch] = []
+    history: List[RiskHistoryItem] = []
 
 class RiskDetailResponse(BaseModel):
     """
