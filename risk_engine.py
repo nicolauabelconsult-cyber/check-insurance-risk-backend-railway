@@ -317,3 +317,66 @@ def get_history_for_identifier(
     )
 
     return q.all()
+
+def aggregate_matches(*args, **kwargs):
+    """
+    Agrega e ordena candidatos por score de match.
+
+    Espera, de forma flexível:
+        - candidates: lista de candidatos (dicts ou ORM)
+        - search / params: dicionário com parâmetros de pesquisa
+        - top_n: número máximo de registos a devolver (default 10)
+
+    Exemplo de chamada típica:
+        aggregate_matches(candidates, search=search_params)
+    """
+
+    # --- extrair argumentos de forma tolerante ---------------------------
+    candidates = kwargs.get("candidates")
+    if candidates is None and args:
+        candidates = args[0]
+
+    if candidates is None:
+        candidates = []
+
+    search_params = (
+        kwargs.get("search")
+        or kwargs.get("params")
+        or (args[1] if len(args) > 1 and isinstance(args[1], dict) else {})
+        or {}
+    )
+
+    top_n = kwargs.get("top_n", 10)
+
+    # garantir que temos algo iterável
+    if not isinstance(candidates, list):
+        candidates = list(candidates)
+
+    aggregated = []
+
+    for cand in candidates:
+        score = calculate_match_score(candidate=cand, search=search_params)
+
+        # se já for dict, copiamos; se for ORM, extraímos campos básicos
+        if isinstance(cand, dict):
+            item = dict(cand)
+        else:
+            item = {
+                "id": getattr(cand, "id", None),
+                "name": getattr(cand, "name", None),
+                "normalized_name": getattr(cand, "normalized_name", None),
+                "nif": getattr(cand, "nif", None),
+                "passport": getattr(cand, "passport", None),
+                "resident_card": getattr(cand, "resident_card", None),
+                "country": getattr(cand, "country", None),
+                "info_source_id": getattr(cand, "info_source_id", None),
+            }
+
+        item["match_score"] = score
+        aggregated.append(item)
+
+    # ordenar por score descrescente
+    aggregated.sort(key=lambda x: x.get("match_score", 0.0), reverse=True)
+
+    return aggregated[:top_n]
+
