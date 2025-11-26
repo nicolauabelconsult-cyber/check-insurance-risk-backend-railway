@@ -8,12 +8,10 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import Base, engine, get_db
-from models import (
-    RiskRecord,
-    RiskLevel,
-    RiskDecision,
-    NormalizedEntity,
-    User,
+from risk_engine import (
+    analyze_risk_request,
+    confirm_match_and_persist,
+    get_history_for_identifier,
 )
 from auth import (
     router as auth_router,
