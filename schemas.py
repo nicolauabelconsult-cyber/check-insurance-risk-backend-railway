@@ -161,6 +161,12 @@ class RiskHistoryItem(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+class HistoricoClienteItem(RiskHistoryItem):
+    """
+    Alias em português para compatibilidade com o main.py.
+    Estrutura idêntica a RiskHistoryItem.
+    """
+    pass
 
 class RiskHistoryResponse(BaseModel):
     """
