@@ -37,6 +37,23 @@ class UserRead(BaseModel):
     # Permite criar o schema directamente a partir do modelo SQLAlchemy
     model_config = ConfigDict(from_attributes=True)
 
+class InfoSourceRead(BaseModel):
+    """
+    Schema para devolver informação sobre as Fontes de Informação (InfoSource)
+    no frontend.
+    """
+    id: int
+    name: str
+    description: Optional[str] = None
+    source_type: Optional[str] = None
+    file_path: Optional[str] = None
+    original_filename: Optional[str] = None
+    is_active: Optional[bool] = None
+    created_at: Optional[datetime] = None
+
+    # Permite criar o schema directamente a partir do modelo SQLAlchemy
+    model_config = ConfigDict(from_attributes=True)
+
 class RiskCheckRequest(BaseModel):
     """
     Payload principal para o endpoint de análise de risco.
@@ -49,6 +66,12 @@ class RiskCheckRequest(BaseModel):
     passport: Optional[str] = None
     resident_card: Optional[str] = None
     nationality: Optional[str] = None
+
+from datetime import datetime
+from typing import Optional, List
+
+from pydantic import BaseModel, EmailStr, ConfigDict
+# (garante que estas imports já lá estão)
 
 class ClienteInfo(BaseModel):
     """
