@@ -3,6 +3,15 @@ from typing import Optional, List
 
 from pydantic import BaseModel, EmailStr, ConfigDict
 
+def normalize_text(value: Optional[str]) -> Optional[str]:
+    """
+    Mantém compatibilidade com versões antigas do backend.
+    Actualmente faz o mesmo que _norm().
+    """
+    if not value:
+        return None
+    return value.strip().upper()
+
 # -------------------------
 # MODELOS DE AUTENTICAÇÃO
 # -------------------------
