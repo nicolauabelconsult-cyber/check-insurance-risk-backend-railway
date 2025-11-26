@@ -82,3 +82,32 @@ class RiskCheckResponse(BaseModel):
     factors: List[str] = []
     candidates: List[CandidateMatch] = []
 
+class MatchResult(BaseModel):
+    """
+    Resultado do endpoint de multi-match / pesquisa de candidatos.
+
+    Usamos:
+    - total: número total de candidatos encontrados
+    - candidates: lista de candidatos (CandidateMatch)
+    """
+    total: int
+    candidates: List[CandidateMatch] = []
+
+class ConfirmMatchRequest(BaseModel):
+    """
+    Payload para o endpoint de confirmação de match.
+
+    - risk_record_id: ID do registo de risco que queremos actualizar
+    - chosen_candidate_id: ID do candidato escolhido pelo analista
+    """
+    risk_record_id: int
+    chosen_candidate_id: Optional[int] = None
+
+class MatchResult(BaseModel):
+    total: int
+    candidates: List[CandidateMatch] = []
+
+
+class ConfirmMatchRequest(BaseModel):
+    risk_record_id: int
+    chosen_candidate_id: Optional[int] = None
