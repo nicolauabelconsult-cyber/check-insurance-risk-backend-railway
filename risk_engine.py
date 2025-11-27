@@ -26,6 +26,19 @@ from sqlalchemy import or_
 
 from models import NormalizedEntity, RiskRecord, RiskLevel
 
+# -------------------------
+# CONSTANTES DE COMPATIBILIDADE
+# -------------------------
+RISK_WEIGHTS = {
+    "name": 20,
+    "nif": 60,
+    "passport": 40,
+    "resident_card": 40,
+    "nationality": 10,
+}
+
+def _norm(value: Optional[str]) -> Optional[str]:
+    ...
 
 # -------------------------------------------------------------------------
 # Helpers
