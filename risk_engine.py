@@ -36,6 +36,13 @@ def _norm(value: Optional[str]) -> Optional[str]:
         return None
     return value.strip().upper()
 
+def normalize_text(value: Optional[str]) -> Optional[str]:
+    """
+    Função de compatibilidade para versões antigas do backend.
+    Faz o mesmo que _norm(), apenas para satisfazer os imports
+    de main.py e outros módulos.
+    """
+    return _norm(value)
 
 def _get_attr(obj: Any, key: str) -> Optional[str]:
     """
