@@ -352,3 +352,19 @@ class FonteInfo(BaseModel):
 
     # Permite criar a partir de modelos SQLAlchemy e ignora campos extra
     model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+class DashboardStats(BaseModel):
+    """
+    Estatísticas gerais para o dashboard.
+
+    Todos os campos são opcionais para evitar erros de validação
+    caso o main.py devolva apenas alguns valores.
+    """
+    total_clients: Optional[int] = None
+    total_risk_records: Optional[int] = None
+    high_risk_count: Optional[int] = None
+    medium_risk_count: Optional[int] = None
+    low_risk_count: Optional[int] = None
+    total_info_sources: Optional[int] = None
+    last_analysis_at: Optional[datetime] = None
+
