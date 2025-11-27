@@ -18,12 +18,6 @@ from auth import (
     get_current_active_user,
     get_current_admin,
 )
-from risk_engine import (
-    find_candidates,
-    calculate_match_score,
-    aggregate_matches,
-    base_level_from_score,
-)
 from schemas import (
     RiskCheckRequest,
     RiskCheckResponse,
