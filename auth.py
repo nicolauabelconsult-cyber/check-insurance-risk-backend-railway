@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import User
-from schemas import Token, LoginRequest
+from schemas import Token, LoginRequest, UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -130,5 +130,5 @@ def login(
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me", response_model=UserRead)
-def read_me(current_user: User = Depends(get_current_active_user)):
+def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
