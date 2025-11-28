@@ -1,18 +1,16 @@
-# auth.py
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 from passlib.context import CryptContext
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+
 from sqlalchemy.orm import Session
 
-from config import settings
 from database import get_db
-from models import User, UserRole
-from schemas import Token, TokenData, LoginRequest, UserRead
-
+from models import User            # 👈 GARANTE QUE ESTA LINHA EXISTE
+from schemas import TokenData
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
