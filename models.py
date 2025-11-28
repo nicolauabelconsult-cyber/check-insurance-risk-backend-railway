@@ -49,44 +49,33 @@ class User(Base):
 class InfoSource(Base):
     __tablename__ = "info_sources"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    type: Mapped[str] = mapped_column(String(50), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    records_count: Mapped[int] = mapped_column(Integer, default=0)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    created_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    created_by = relationship("User")
-    entities = relationship("NormalizedEntity", back_populates="source")
-
-
+    # RELAÇÃO CORRECTA COM NormalizedEntity
+    entities = relationship(
+        "NormalizedEntity",
+        back_populates="source",
+        cascade="all, delete-orphan",
 class NormalizedEntity(Base):
     __tablename__ = "normalized_entities"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    source_id: Mapped[int] = mapped_column(Integer, ForeignKey("info_sources.id"))
-    source_type: Mapped[str] = mapped_column(String(50))
-    source_risk_weight: Mapped[int] = mapped_column(Integer, default=0)
+    id = Column(Integer, primary_key=True, index=True)
 
-    full_name_norm: Mapped[str] = mapped_column(Text, index=True)
-    nif_norm: Mapped[Optional[str]] = mapped_column(String(100), index=True, nullable=True)
-    passport_norm: Mapped[Optional[str]] = mapped_column(
-        String(100), index=True, nullable=True
+    info_source_id = Column(Integer, ForeignKey("info_sources.id"), nullable=True)
+
+    # outros campos...
+    # normalized_name = Column(String, index=True)
+    # nif = Column(String, index=True)
+    # ...
+
+    # RELAÇÃO CORRECTA COM InfoSource
+    source = relationship(
+        "InfoSource",
+        back_populates="entities",
     )
-    resident_card_norm: Mapped[Optional[str]] = mapped_column(
-        String(100), index=True, nullable=True
-    )
-
-    country_code: Mapped[Optional[str]] = mapped_column(String(3), nullable=True)
-    role_or_position: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    extra_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-    source = relationship("InfoSource", backref="entities")
-
 
 class RiskRecord(Base):
     __tablename__ = "risk_records"
