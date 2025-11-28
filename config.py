@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 import json
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,18 +15,15 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # BASE DE DADOS
     # ------------------------------------------------------------------
-    SQLALCHEMY_DATABASE_URI: str = "sqlite:///./app.db"  # ajusta se usares Postgres
+    # Usado pelo main.py (DATABASE_URL) e por alguns setups antigos
+    DATABASE_URL: str = "sqlite:///./app.db"
+    SQLALCHEMY_DATABASE_URI: str = "sqlite:///./app.db"  # se quiseres, podes usar só um
 
     # ------------------------------------------------------------------
     # CORS
     # ------------------------------------------------------------------
     # O main.py está a usar settings.BACKEND_CORS_ORIGINS
-    # Por isso este campo TEM de existir.
     BACKEND_CORS_ORIGINS: List[str] = ["*"]
-
-    # Opcional: se quiseres um nome alternativo na .env, por exemplo:
-    # BACKEND_CORS_ORIGINS=["http://localhost:5173","https://teu-front.netlify.app"]
-    # ou BACKEND_CORS_ORIGINS="http://localhost:5173,https://teu-front.netlify.app"
 
     # ------------------------------------------------------------------
     # AUTENTICAÇÃO / JWT
@@ -43,13 +40,6 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",  # ignora variáveis extra na .env sem rebentar
     )
-
-    class Settings(BaseSettings):
-    # ...
-
-    # BASE DE DADOS
-    DATABASE_URL: str = "sqlite:///./app.db"          # 👈 NOVO
-    SQLALCHEMY_DATABASE_URI: str = "sqlite:///./app.db"
 
     # ------------------------------------------------------------------
     # Normalizar lista de CORS vinda da .env (string -> lista)
