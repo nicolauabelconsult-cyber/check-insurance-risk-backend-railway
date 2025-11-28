@@ -44,6 +44,13 @@ class Settings(BaseSettings):
         extra="ignore",  # ignora variáveis extra na .env sem rebentar
     )
 
+    class Settings(BaseSettings):
+    # ...
+
+    # BASE DE DADOS
+    DATABASE_URL: str = "sqlite:///./app.db"          # 👈 NOVO
+    SQLALCHEMY_DATABASE_URI: str = "sqlite:///./app.db"
+
     # ------------------------------------------------------------------
     # Normalizar lista de CORS vinda da .env (string -> lista)
     # ------------------------------------------------------------------
