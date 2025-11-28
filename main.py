@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from config import settings
+from models import User
 from database import Base, engine, get_db
 from risk_engine import (
     analyze_risk_request,
