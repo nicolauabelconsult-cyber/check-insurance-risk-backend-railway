@@ -117,18 +117,17 @@ def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    user = authenticate_user(db, form_data.username, form_data.password)
-    if not user:
+    user = db.query(User).filter(User.username == form_data.username).first()
+
+    if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
-            status_code=401,
-            detail="Username ou password inválidos.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuário ou senha incorretos."
         )
 
-    access_token = create_access_token(
-        data={"sub": user.username, "role": user.role},
-    )
-    return Token(access_token=access_token, role=user.role)
+    access_token = create_access_token({"sub": user.username})
 
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me", response_model=UserRead)
 def read_me(current_user: User = Depends(get_current_active_user)):
