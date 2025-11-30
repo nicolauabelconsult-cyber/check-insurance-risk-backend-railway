@@ -73,7 +73,6 @@ def startup_event() -> None:
 # ENDPOINTS DE RISCO
 # -------------------------------------------------------------------
 
-
 @app.post(f"{settings.API_PREFIX}/risk/check", response_model=RiskCheckResponse)
 def risk_check(
     payload: RiskCheckRequest,
@@ -82,94 +81,74 @@ def risk_check(
 ) -> RiskCheckResponse:
     """
     Executa análise de risco:
-    - pesquisa em entidades normalizadas
+    - procura candidatos
     - calcula score e nível
     - grava RiskRecord
-    - devolve matches possíveis
+    - devolve matches com match_score
     """
 
-    # 1. Procurar candidatos em todas as fontes
-    candidates: List[NormalizedEntity] = find_candidates(
-        db,
-        full_name=payload.full_name,
+    # 1) Pedir ao motor que faça a análise
+    result = analyze_risk_request(
+        db=db,
+        name=payload.name,
         nif=payload.nif,
         passport=payload.passport,
         resident_card=payload.resident_card,
+        nationality=payload.nationality,
     )
 
-    entities_with_scores = []
-    explanation_global: List[str] = []
+    raw_candidates = result.get("candidates", []) or []
+    score = float(result.get("score") or 0.0)
+    level_enum = base_level_from_score(score)
+    level = level_enum.value
+    factors = result.get("factors", []) or []
 
-    if candidates:
-        for entity in candidates:
-            score, factors = calculate_match_score(
-                country=payload.country,
-                entity=entity,
-                input_full_name=payload.full_name,
-                input_nif=payload.nif,
-                input_passport=payload.passport,
-                input_resident_card=payload.resident_card,
-            )
-            entities_with_scores.append((entity, score, factors))
+    # 2) Agregar candidatos com match_score
+    aggregated = aggregate_matches(raw_candidates, search={
+        "name": payload.name,
+        "nif": payload.nif,
+        "passport": payload.passport,
+        "resident_card": payload.resident_card,
+        "nationality": payload.nationality,
+    })
+
+    # 3) Sugerir decisão
+    if level_enum in (RiskLevel.HIGH, RiskLevel.CRITICAL):
+        decision_suggested = RiskDecision.UNDER_INVESTIGATION.value
     else:
-        # Sem matches, score baixo
-        explanation_global.append(
-            "Nenhuma correspondência encontrada em bases PEP/Fraude/Sinistros/Sanções."
-        )
+        decision_suggested = RiskDecision.APPROVED.value
 
-    # 2. Agregar matches
-    matches_objects: List[MatchResult] = []
-    if entities_with_scores:
-        aggregated = aggregate_matches(entities_with_scores)
-        for item in aggregated:
-            matches_objects.append(
-                MatchResult(
-                    match_id=item["match_id"],
-                    nome=item["entity"].full_name_norm or "",
-                    fontes=[item["entity"].source_type],
-                    score=item["score"],
-                    nivel=item["nivel"],
-                    explicacao=item["factors"],
-                )
-            )
-        # Score global = máximo dos matches
-        score_global = max(m.score for m in matches_objects)
-        explanation_global = ["Matches encontrados em bases de alto risco."]
-    else:
-        score_global = 10
-
-    level_global = base_level_from_score(score_global)
-    if level_global in [RiskLevel.HIGH, RiskLevel.CRITICAL]:
-        decision_suggested = RiskDecision.UNDER_INVESTIGATION
-    else:
-        decision_suggested = RiskDecision.APPROVED
-
-    # 3. Gravar registo de risco
+    # 4) Guardar o registo na BD
     record = RiskRecord(
-        full_name=payload.full_name,
+        full_name=payload.name,
         nif=payload.nif,
         passport=payload.passport,
         resident_card=payload.resident_card,
-        country=payload.country,
-        score=score_global,
-        level=level_global.value,
+        country=payload.nationality,
+        score=int(score),
+        level=level,
         decision=None,
-        explanation=explanation_global,
+        decision_notes=None,
+        explanation={
+            "factors": factors,
+            "candidates": aggregated,  # isto é óptimo para o PDF / detalhe
+            "decision_suggested": decision_suggested,
+        },
         analyst_id=current_user.id,
     )
     db.add(record)
     db.commit()
     db.refresh(record)
 
+    # 5) Preparar resposta para o frontend
     return RiskCheckResponse(
-        analysis_id=record.id,
-        score=score_global,
-        level=level_global,
-        decision_suggested=decision_suggested,
-        explanation=explanation_global,
-        matches=matches_objects,
+        score=score,
+        level=level,
+        factors=factors,
+        candidates=[
+            CandidateMatch(**c) for c in aggregated
+        ],
     )
-
 
 @app.post(f"{settings.API_PREFIX}/risk/confirm-match")
 def confirm_match(
