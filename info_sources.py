@@ -1,7 +1,6 @@
 # app/info_sources.py
 from typing import List
 
-import pandas as pd
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
