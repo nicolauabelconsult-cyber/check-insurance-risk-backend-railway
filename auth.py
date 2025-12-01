@@ -7,55 +7,59 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
-from config import settings
 from database import get_db
 from models import User, UserRole
-from schemas import Token, UserRead  # LoginRequest é opcional se não estiveres a usar
+from schemas import Token, UserRead
+from config import settings
 
-
+# -------------------------------------------------------------------
+# ROUTER
+# -------------------------------------------------------------------
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Usar PBKDF2-SHA256 em vez de bcrypt para evitar problemas no Render
-pwd_context = CryptContext(
-    schemes=["pbkdf2_sha256"],
-    deprecated="auto",
+# -------------------------------------------------------------------
+# PASSWORD HASHING (SEM BCRYPT)
+# -------------------------------------------------------------------
+# Usamos pbkdf2_sha256 para evitar problemas com bcrypt no Render.
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
+# OAuth2 – o frontend faz login em /api/auth/login
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl=f"{settings.API_PREFIX}/auth/login"
 )
 
-# O endpoint real de login é /api/auth/login (API_PREFIX + prefix + /login)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
-
-# ----------------- UTILITÁRIOS DE PASSWORD -----------------
-
-
+# -------------------------------------------------------------------
+# UTILITÁRIOS DE PASSWORD
+# -------------------------------------------------------------------
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verifica se a password corresponde ao hash armazenado."""
     return pwd_context.verify(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
+    """
+    Gera o hash da password.
+    (Usado também pelo seed_admin.py para criar o admin inicial.)
+    """
     return pwd_context.hash(password)
 
 
-# ----------------- JWT -----------------
-
-
+# -------------------------------------------------------------------
+# JWT
+# -------------------------------------------------------------------
 def create_access_token(
-    data: dict,
-    expires_delta: Optional[timedelta] = None,
+    data: dict, expires_delta: Optional[timedelta] = None
 ) -> str:
     """
-    Cria um token JWT com payload `data`.
-
-    Usa:
-      - settings.ACCESS_TOKEN_EXPIRE_MINUTES
-      - settings.JWT_SECRET_KEY
-      - settings.JWT_ALGORITHM
+    Cria um token JWT com:
+    - sub: username
+    - role: perfil do utilizador
     """
-    if expires_delta is None:
-        expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-
     to_encode = data.copy()
-    expire = datetime.utcnow() + expires_delta
+    expire = datetime.utcnow() + (
+        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
     to_encode.update({"exp": expire})
 
     encoded_jwt = jwt.encode(
@@ -66,6 +70,9 @@ def create_access_token(
     return encoded_jwt
 
 
+# -------------------------------------------------------------------
+# HELPERS DE UTILIZADOR
+# -------------------------------------------------------------------
 def get_user_by_username(db: Session, username: str) -> Optional[User]:
     return db.query(User).filter(User.username == username).first()
 
@@ -79,12 +86,15 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     return user
 
 
+# -------------------------------------------------------------------
+# DEPENDENCIES – CURRENT USER / ADMIN
+# -------------------------------------------------------------------
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> User:
     """
-    Lê o token JWT, valida e devolve o utilizador actual.
+    Valida o token JWT e devolve o utilizador actual.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -98,7 +108,7 @@ async def get_current_user(
             settings.JWT_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM],
         )
-        username: Optional[str] = payload.get("sub")
+        username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
     except JWTError:
@@ -107,6 +117,7 @@ async def get_current_user(
     user = get_user_by_username(db, username)
     if user is None:
         raise credentials_exception
+
     return user
 
 
@@ -124,41 +135,44 @@ async def get_current_admin(
     if current_user.role != UserRole.ADMIN.value:
         raise HTTPException(
             status_code=403,
-            detail="Apenas administradores podem aceder.",
+            detail="Apenas administradores podem aceder a esta funcionalidade.",
         )
     return current_user
 
 
-# ----------------- ROTAS -----------------
-
-
+# -------------------------------------------------------------------
+# ROTAS DE AUTENTICAÇÃO
+# -------------------------------------------------------------------
 @router.post("/login", response_model=Token)
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
     """
-    Endpoint de login com OAuth2PasswordRequestForm (username & password via form-data).
+    Endpoint de login:
+    - recebe username + password via form-data (padrão OAuth2)
+    - devolve access_token (JWT) + token_type
     """
-    user = db.query(User).filter(User.username == form_data.username).first()
-
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Usuário ou senha incorretos.",
+            detail="Nome de utilizador ou palavra-passe incorrectos.",
         )
 
-    # Incluímos também o role no token, se quiseres usar mais tarde
     access_token = create_access_token(
-        {"sub": user.username, "role": user.role}
+        data={"sub": user.username, "role": user.role}
     )
 
     return {"access_token": access_token, "token_type": "bearer"}
 
 
 @router.get("/me", response_model=UserRead)
-def read_users_me(current_user: User = Depends(get_current_user)):
+def read_users_me(
+    current_user: User = Depends(get_current_active_user),
+):
     """
-    Devolve o utilizador autenticado.
+    Devolve os dados do utilizador autenticado.
+    Usado pelo frontend para mostrar o nome / role.
     """
     return current_user
