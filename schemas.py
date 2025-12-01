@@ -258,6 +258,37 @@ class RiskDetailResponse(BaseModel):
     relacoes: List[str] = []
     recomendacoes: Optional[str] = None
 
+# ============================================================
+# 2. UTILIZADOR
+# ============================================================
+
+class UserRead(BaseModel):
+    id: int
+    username: str
+    email: Optional[EmailStr] = None
+    full_name: Optional[str] = None
+    role: str
+    is_active: bool
+    created_at: Optional[datetime] = None
+
+    # Permite criar directamente a partir do modelo SQLAlchemy
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserCreate(BaseModel):
+    """
+    Payload para criação de utilizadores via /api/users.
+    Compatível com o ecrã de Administração:
+      - Nome (full_name)
+      - Email
+      - Password inicial
+      - Perfil (role: ADMIN / ANALYST)
+    """
+    full_name: str
+    email: EmailStr
+    username: str
+    initial_password: str
+    role: str  # "ADMIN" ou "ANALYST"
 
 # ============================================================
 # 7. DASHBOARD
