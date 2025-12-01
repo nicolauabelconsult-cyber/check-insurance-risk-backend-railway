@@ -245,3 +245,33 @@ def confirm_match_and_persist(
     db.commit()
     db.refresh(risk_record)
     return risk_record
+
+def get_history_for_identifier(
+    db: Session,
+    identifier: str,
+) -> List[RiskRecord]:
+    """
+    Devolve o histórico de análises para um identificador
+    (NIF / passaporte / cartão de residente).
+
+    O main.py só precisa que esta função exista e devolva
+    uma lista de RiskRecord.
+    """
+    ident = (identifier or "").strip().upper()
+    if not ident:
+        return []
+
+    records = (
+        db.query(RiskRecord)
+        .filter(
+            or_(
+                RiskRecord.nif == ident,
+                RiskRecord.passport == ident,
+                RiskRecord.resident_card == ident,
+            )
+        )
+        .order_by(RiskRecord.created_at.desc())
+        .all()
+    )
+
+    return records
