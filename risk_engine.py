@@ -224,3 +224,26 @@ def analyze_risk_request(
         factors.append("Foram encontrados registos relevantes nas bases internas.")
     if best_score >= 80:
         factors.append("Alta probabilidade de correspondência")
+
+def confirm_match_and_persist(
+    db: Session,
+    risk_record: RiskRecord,
+    chosen_candidate_id: Optional[int] = None,
+) -> RiskRecord:
+    """
+    Confirma o match escolhido pelo analista e actualiza o RiskRecord.
+
+    - risk_record: registo de risco já existente na BD
+    - chosen_candidate_id: ID da entidade (NormalizedEntity) escolhida como match
+
+    Se a tua tabela RiskRecord tiver outro nome de campo,
+    troca 'confirmed_entity_id' pelo campo correcto.
+    """
+    if chosen_candidate_id is not None:
+        # campo definido em models.RiskRecord
+        setattr(risk_record, "confirmed_entity_id", chosen_candidate_id)
+
+    db.add(risk_record)
+    db.commit()
+    db.refresh(risk_record)
+    return risk_record
