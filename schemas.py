@@ -257,6 +257,32 @@ class RiskDetailResponse(BaseModel):
     historico_cliente: List[HistoricoClienteItem] = []
     relacoes: List[str] = []
     recomendacoes: Optional[str] = None
+# ============================================================
+# 2. UTILIZADOR
+# ============================================================
+
+class UserCreate(BaseModel):
+    """
+    Esquema usado no endpoint de criação de utilizadores (/api/users).
+    Deve alinhar com o JSON que o frontend envia.
+    """
+    username: str
+    email: Optional[EmailStr] = None
+    full_name: Optional[str] = None
+    role: str
+    password: str
+
+
+class UserRead(BaseModel):
+    id: int
+    username: str
+    email: Optional[EmailStr] = None
+    full_name: Optional[str] = None
+    role: str
+    is_active: bool
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 # ============================================================
 # 2. UTILIZADOR
