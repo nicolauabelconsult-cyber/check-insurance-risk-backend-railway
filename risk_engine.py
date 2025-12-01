@@ -223,4 +223,4 @@ def analyze_risk_request(
     if aggregated:
         factors.append("Foram encontrados registos relevantes nas bases internas.")
     if best_score >= 80:
-        factors.append("Alta probabilidade de correspondência
+        factors.append("Alta probabilidade de correspondência")
