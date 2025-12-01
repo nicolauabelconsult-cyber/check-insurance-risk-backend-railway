@@ -3,15 +3,11 @@ Motor de Risco – Versão Final
 100% compatível com backend + frontend + reporting
 """
 
+from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy.orm import Session
-from typing import Optional
 from models import NormalizedEntity, RiskRecord, RiskLevel
-
-
-from models import NormalizedEntity, RiskRecord, RiskLevel
-
 
 # ============================================================
 # 1. NORMALIZAÇÃO
