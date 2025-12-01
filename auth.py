@@ -7,6 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+
+# Usar pbkdf2_sha256 em vez de bcrypt para evitar problemas com o módulo bcrypt
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
 from sqlalchemy.orm import Session
 
 from config import settings
