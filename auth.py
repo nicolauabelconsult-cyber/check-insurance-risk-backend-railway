@@ -6,26 +6,20 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
-
 from config import settings
+SECRET_KEY = getattr(settings, "SECRET_KEY", "change-me")
 
-# Tenta usar primeiro os campos "novos" (JWT_*),
-# mas é compatível com a tua versão actual (SECRET_KEY / AUTH_ALGORITHM / ACCESS_TOKEN_EXPIRE_HOURS).
-
-SECRET_KEY = getattr(settings, "JWT_SECRET_KEY", None) or getattr(
-    settings, "SECRET_KEY", "change-me"
+ALGORITHM = getattr(
+    settings,
+    "JWT_ALGORITHM",
+    getattr(settings, "AUTH_ALGORITHM", "HS256"),
 )
 
-ALGORITHM = getattr(settings, "JWT_ALGORITHM", None) or getattr(
-    settings, "AUTH_ALGORITHM", "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = getattr(
+    settings,
+    "ACCESS_TOKEN_EXPIRE_MINUTES",
+    12 * 60,  # fallback: 12 horas
 )
-
-# Se tiveres ACCESS_TOKEN_EXPIRE_MINUTES, usa. Se só tiveres ACCESS_TOKEN_EXPIRE_HOURS, converte para minutos.
-if hasattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES"):
-    ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
-else:
-    hours = getattr(settings, "ACCESS_TOKEN_EXPIRE_HOURS", 12)
-    ACCESS_TOKEN_EXPIRE_MINUTES = int(hours) * 60
 
 from database import get_db
 from models import User, UserRole
