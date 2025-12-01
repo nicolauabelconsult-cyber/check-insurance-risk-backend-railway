@@ -6,7 +6,9 @@ Motor de Risco – Versão Final
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from typing import Optional
+from models import NormalizedEntity, RiskRecord, RiskLevel
+
 
 from models import NormalizedEntity, RiskRecord, RiskLevel
 
