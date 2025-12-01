@@ -7,10 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-
-# Usar pbkdf2_sha256 em vez de bcrypt para evitar problemas com o módulo bcrypt
-pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -45,7 +41,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES = getattr(
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Usar pbkdf2_sha256 em vez de bcrypt
+pwd_context = CryptContext(
+    schemes=["pbkdf2_sha256"],
+    deprecated="auto",
+)
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
