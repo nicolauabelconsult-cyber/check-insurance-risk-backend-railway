@@ -9,28 +9,23 @@ Funcionalidades:
 - GET  /api/info-sources/{id}/sample    -> amostra de entidades (para debug / frontend)
 """
 
-from io import BytesIO
-from typing import List, Optional
+from datetime import datetime
+from enum import Enum
+from typing import Optional
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    HTTPException,
-    UploadFile,
-    status,
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    DateTime,
+    Boolean,
+    ForeignKey,
+    Text,
+    JSON,
 )
-from sqlalchemy.orm import Session
-from openpyxl import load_workbook
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from database import get_db
-from models import InfoSource, NormalizedEntity, User
-from schemas import InfoSourceRead
-from auth import get_current_active_user, get_current_admin
-
-router = APIRouter(prefix="/info-sources", tags=["info-sources"])
-
+from database import Base
 
 # -------------------------------------------------------------------------
 # Helpers internos
