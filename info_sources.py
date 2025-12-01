@@ -1,16 +1,31 @@
-# app/info_sources.py
-from typing import List
+"""
+info_sources.py
+Gestão das Fontes de Informação (InfoSource) e importação de bases Excel
+sem usar pandas, apenas openpyxl.
+"""
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from typing import List, Optional
+from io import BytesIO
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    UploadFile,
+    File,
+    Form,
+)
 from sqlalchemy.orm import Session
+from openpyxl import load_workbook
 
-from auth import get_current_admin
 from database import get_db
 from models import InfoSource, NormalizedEntity, User
 from schemas import InfoSourceRead
-from risk_engine import normalize_text, RISK_WEIGHTS
+from auth import get_current_active_user, get_current_admin
 
-router = APIRouter(prefix="/info-sources", tags=["info-sources"])
+
+router = APIRouter(prefix="/info-sources", tags=["Info Sources"])
 
 
 @router.get("/", response_model=List[InfoSourceRead])
