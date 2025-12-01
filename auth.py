@@ -1,365 +1,172 @@
-# main.py
-from typing import List, Optional
+from datetime import datetime, timedelta
+from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from config import settings
-from database import Base, engine, get_db
-from models import (
-    User,
-    RiskRecord,
-    NormalizedEntity,
-    RiskLevel,
-    RiskDecision,
-)
-from auth import (
-    router as auth_router,
-    get_current_active_user,
-    get_current_admin,
-)
-from schemas import (
-    RiskCheckRequest,
-    RiskCheckResponse,
-    CandidateMatch,
-    ConfirmMatchRequest,
-    RiskHistoryResponse,
-    RiskHistoryItem,
-    RiskDetailResponse,
-)
-from risk_engine import (
-    analyze_risk_request,
-    calculate_match_score,
-)
-from reporting import generate_risk_pdf, export_risk_excel
-from info_sources import router as info_sources_router
-from dashboard import router as dashboard_router
-from seed_admin import seed_default_admin
+from database import get_db
+from models import User, UserRole
+from schemas import Token, LoginRequest, UserRead, TokenData
 
+# -------------------------------------------------------
+# CONFIG JWT / PASSWORD
+# -------------------------------------------------------
 
-# -------------------------------------------------------------------
-# APP & CORS
-# -------------------------------------------------------------------
-app = FastAPI(title=settings.PROJECT_NAME)
+SECRET_KEY = settings.JWT_SECRET_KEY
+ALGORITHM = settings.JWT_ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl=f"{settings.API_PREFIX}/auth/login"
 )
 
-# Routers externos
-app.include_router(auth_router, prefix=settings.API_PREFIX)
-app.include_router(info_sources_router, prefix=settings.API_PREFIX)
-app.include_router(dashboard_router, prefix=settings.API_PREFIX)
-
-# Criar tabelas na base de dados
-Base.metadata.create_all(bind=engine)
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@app.on_event("startup")
-def startup_event() -> None:
-    """
-    Evento de arranque:
-    - cria o utilizador admin por defeito, se ainda não existir.
-    """
-    db = next(get_db())
-    try:
-        seed_default_admin(db)
-    finally:
-        db.close()
+# -------------------------------------------------------
+# UTILITÁRIOS DE PASSWORD
+# -------------------------------------------------------
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
 
 
-# -------------------------------------------------------------------
-# ENDPOINTS DE RISCO
-# -------------------------------------------------------------------
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
 
 
-@app.post(f"{settings.API_PREFIX}/risk/check", response_model=RiskCheckResponse)
-def risk_check(
-    payload: RiskCheckRequest,
+# -------------------------------------------------------
+# JWT
+# -------------------------------------------------------
+
+def create_access_token(
+    data: dict, expires_delta: Optional[timedelta] = None
+) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(
+        to_encode,
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+    return encoded_jwt
+
+
+# -------------------------------------------------------
+# HELPER PARA BUSCAR UTILIZADOR
+# -------------------------------------------------------
+
+def get_user_by_username(db: Session, username: str) -> Optional[User]:
+    return db.query(User).filter(User.username == username).first()
+
+
+def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
+    user = get_user_by_username(db, username)
+    if not user or not user.is_active:
+        return None
+    if not verify_password(password, user.hashed_password):
+        return None
+    return user
+
+
+# -------------------------------------------------------
+# DEPENDÊNCIAS DE AUTENTICAÇÃO
+# -------------------------------------------------------
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> RiskCheckResponse:
-    """
-    Executa análise de risco:
-
-    - Usa risk_engine.analyze_risk_request para obter score, nível, factores e candidatos.
-    - Calcula match_score por candidato.
-    - Grava um RiskRecord na base de dados.
-    - Devolve RiskCheckResponse (score, level, factors, candidates).
-    """
-
-    # 1) Chamar o motor de risco
-    result = analyze_risk_request(
-        db=db,
-        name=payload.name,
-        nif=payload.nif,
-        passport=payload.passport,
-        resident_card=payload.resident_card,
-        nationality=payload.nationality,
+) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Credenciais inválidas ou sessão expirada.",
+        headers={"WWW-Authenticate": "Bearer"},
     )
-
-    raw_score = result.get("score") or 0.0
     try:
-        score = float(raw_score)
-    except (TypeError, ValueError):
-        score = 0.0
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM],
+        )
+        username: str = payload.get("sub")
+        role: Optional[str] = payload.get("role")
+        if username is None:
+            raise credentials_exception
 
-    level_value = result.get("level")
-    if isinstance(level_value, RiskLevel):
-        level_str = level_value.value
-    else:
-        level_str = str(level_value or RiskLevel.LOW.value)
+        # Compatível com schemas.TokenData (mesmo que só tenha username)
+        _ = TokenData(username=username)
+    except JWTError:
+        raise credentials_exception
 
-    factors = result.get("factors") or []
-    raw_candidates = result.get("candidates") or []
-
-    # 2) Calcular match_score por candidato
-    search_params = {
-        "name": payload.name,
-        "nif": payload.nif,
-        "passport": payload.passport,
-        "resident_card": payload.resident_card,
-        "nationality": payload.nationality,
-    }
-
-    candidates: List[CandidateMatch] = []
-    for c in raw_candidates:
-        # Garantir que temos um dict com os campos esperados
-        if isinstance(c, dict):
-            cand_dict = dict(c)
-        else:
-            cand_dict = {
-                "id": getattr(c, "id", None),
-                "name": getattr(c, "name", None),
-                "normalized_name": getattr(c, "normalized_name", None),
-                "nif": getattr(c, "nif", None),
-                "passport": getattr(c, "passport", None),
-                "resident_card": getattr(c, "resident_card", None),
-                "country": getattr(c, "country", None),
-                "info_source_id": getattr(c, "info_source_id", None),
-            }
-
-        match_score = calculate_match_score(candidate=cand_dict, search=search_params)
-        cand_dict["match_score"] = match_score
-
-        candidates.append(CandidateMatch(**cand_dict))
-
-    # 3) Gravar registo de risco
-    record = RiskRecord(
-        full_name=payload.name,
-        nif=payload.nif,
-        passport=payload.passport,
-        resident_card=payload.resident_card,
-        country=payload.nationality,
-        score=int(score),
-        level=level_str,
-        decision=None,
-        explanation={"factors": factors},
-        analyst_id=current_user.id,
-    )
-
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-
-    # 4) Resposta para o frontend
-    return RiskCheckResponse(
-        score=score,
-        level=level_str,
-        factors=factors,
-        candidates=candidates,
-    )
+    user = get_user_by_username(db, username)  # type: ignore[arg-type]
+    if user is None:
+        raise credentials_exception
+    return user
 
 
-@app.post(f"{settings.API_PREFIX}/risk/confirm-match")
-def confirm_match(
-    payload: ConfirmMatchRequest,
-    db: Session = Depends(get_db),
+async def get_current_active_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    if not current_user.is_active:
+        raise HTTPException(status_code=400, detail="Utilizador inactivo.")
+    return current_user
+
+
+async def get_current_admin(
     current_user: User = Depends(get_current_active_user),
+) -> User:
+    if current_user.role != UserRole.ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Apenas administradores podem aceder.",
+        )
+    return current_user
+
+
+# -------------------------------------------------------
+# ROTAS
+# -------------------------------------------------------
+
+@router.post("/login", response_model=Token)
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
 ):
     """
-    Confirma o candidato escolhido para um determinado RiskRecord.
+    Endpoint de login (username/password).
 
-    - risk_record_id: ID do registo de risco
-    - chosen_candidate_id: ID da NormalizedEntity seleccionada
+    - Verifica credenciais
+    - Gera access_token JWT
     """
-    record = (
-        db.query(RiskRecord)
-        .filter(RiskRecord.id == payload.risk_record_id)
-        .first()
-    )
-    if not record:
-        raise HTTPException(status_code=404, detail="Registo de risco não encontrado.")
+    user = db.query(User).filter(User.username == form_data.username).first()
 
-    if payload.chosen_candidate_id is not None:
-        entity = (
-            db.query(NormalizedEntity)
-            .filter(NormalizedEntity.id == payload.chosen_candidate_id)
-            .first()
-        )
-        if not entity:
-            raise HTTPException(status_code=404, detail="Entidade seleccionada não existe.")
-        record.confirmed_entity_id = entity.id
-
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-
-    return {"success": True, "message": "Match confirmado com sucesso."}
-
-
-@app.get(f"{settings.API_PREFIX}/risk/history", response_model=RiskHistoryResponse)
-def risk_history(
-    identifier: str = Query(..., description="NIF, passaporte, cartão de residente ou nome"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> RiskHistoryResponse:
-    """
-    Devolve o histórico de análises para um identificador:
-    - NIF, passaporte, cartão de residente ou nome.
-    """
-
-    q = f"%{identifier.upper()}%"
-
-    records = (
-        db.query(RiskRecord)
-        .filter(
-            (RiskRecord.nif.ilike(q))
-            | (RiskRecord.passport.ilike(q))
-            | (RiskRecord.resident_card.ilike(q))
-            | (RiskRecord.full_name.ilike(q))
-        )
-        .order_by(RiskRecord.created_at.desc())
-        .all()
-    )
-
-    history_items: List[RiskHistoryItem] = []
-    for r in records:
-        history_items.append(
-            RiskHistoryItem(
-                id=r.id,
-                name=r.full_name,
-                nif=r.nif,
-                passport=r.passport,
-                resident_card=r.resident_card,
-                risk_level=r.level,
-                risk_score=r.score,
-                created_at=r.created_at,
-            )
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Utilizador ou password incorretos.",
         )
 
-    return RiskHistoryResponse(
-        identifier=identifier,
-        history=history_items,
-        total=len(history_items),
+    access_token = create_access_token(
+        {"sub": user.username, "role": user.role}
     )
 
+    return {"access_token": access_token, "token_type": "bearer"}
 
-@app.get(f"{settings.API_PREFIX}/risk/{{risk_id}}", response_model=RiskDetailResponse)
-def risk_detail(
-    risk_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> RiskDetailResponse:
+
+@router.get("/me", response_model=UserRead)
+def read_users_me(
+    current_user: User = Depends(get_current_user),
+):
     """
-    Detalhe de uma análise de risco específica.
-    Alimenta o ecrã de detalhe / relatório web.
+    Devolve o utilizador actualmente autenticado.
     """
-    r: Optional[RiskRecord] = (
-        db.query(RiskRecord).filter(RiskRecord.id == risk_id).first()
-    )
-    if not r:
-        raise HTTPException(status_code=404, detail="Análise não encontrada.")
-
-    # Reconstruir pedido original (aproximado) a partir do RiskRecord
-    request_obj = RiskCheckRequest(
-        name=r.full_name,
-        nif=r.nif,
-        passport=r.passport,
-        resident_card=r.resident_card,
-        nationality=r.country,
-    )
-
-    # Factores
-    factors: List[str] = []
-    if isinstance(r.explanation, dict) and "factors" in r.explanation:
-        raw_factors = r.explanation.get("factors") or []
-        factors = [str(f) for f in raw_factors]
-    elif isinstance(r.explanation, list):
-        factors = [str(f) for f in r.explanation]
-
-    # Histórico para o mesmo NIF/passaporte/cartão (ou nome)
-    identifier = r.nif or r.passport or r.resident_card or r.full_name
-    history_records: List[RiskRecord] = []
-    if identifier:
-        history_records = (
-            db.query(RiskRecord)
-            .filter(
-                (RiskRecord.nif == identifier)
-                | (RiskRecord.passport == identifier)
-                | (RiskRecord.resident_card == identifier)
-                | (RiskRecord.full_name == identifier)
-            )
-            .order_by(RiskRecord.created_at.desc())
-            .all()
-        )
-
-    history_items: List[RiskHistoryItem] = []
-    for h in history_records:
-        history_items.append(
-            RiskHistoryItem(
-                id=h.id,
-                name=h.full_name,
-                nif=h.nif,
-                passport=h.passport,
-                resident_card=h.resident_card,
-                risk_level=h.level,
-                risk_score=h.score,
-                created_at=h.created_at,
-            )
-        )
-
-    return RiskDetailResponse(
-        id=r.id,
-        request=request_obj,
-        score=r.score,
-        level=r.level,
-        factors=factors,
-        candidates=[],          # neste momento não estamos a persistir matches por análise
-        history=history_items,
-    )
-
-
-@app.get(f"{settings.API_PREFIX}/risk/{{risk_id}}/report/pdf")
-def risk_report_pdf(
-    risk_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> StreamingResponse:
-    """
-    Gera o PDF da análise individual.
-    Depende de reporting.generate_risk_pdf estar implementado.
-    """
-    r = db.query(RiskRecord).filter(RiskRecord.id == risk_id).first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Análise não encontrada.")
-
-    return generate_risk_pdf(db, r)
-
-
-@app.get(f"{settings.API_PREFIX}/risk/export/excel")
-def risk_export_excel(
-    db: Session = Depends(get_db),
-    current_admin: User = Depends(get_current_admin),
-) -> StreamingResponse:
-    """
-    Exporta todas as análises em Excel.
-    Apenas utilizadores ADMIN podem aceder.
-    """
-    return export_risk_excel(db)
+    return current_user
