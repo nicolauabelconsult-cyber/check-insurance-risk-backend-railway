@@ -1,6 +1,6 @@
 """
-Motor de Risco – Versão simplificada e compatível
-com o main.py e restantes módulos.
+risk_engine.py
+Motor de Risco – Versão simplificada e compatível com o main.py
 """
 
 from typing import Any, Dict, List, Optional
@@ -176,7 +176,6 @@ def aggregate_matches(
 
     aggregated: List[Dict[str, Any]] = []
 
-    # garantir que é lista
     if not isinstance(candidates, list):
         candidates = list(candidates)
 
@@ -205,7 +204,7 @@ def aggregate_matches(
 
 
 # ============================================================
-# 5. ANALYSE RISK REQUEST – Versão genérica (opcional)
+# 5. ANALYSE RISK REQUEST – função genérica
 # ============================================================
 
 def analyze_risk_request(
@@ -217,10 +216,7 @@ def analyze_risk_request(
     nationality: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Versão genérica: devolve score, level, factors e candidates.
-
-    Mesmo que o teu main.py tenha lógica própria em /risk/check,
-    esta função fica disponível para outros usos.
+    Devolve score, level, factors e candidates.
     """
     search = {
         "name": name,
@@ -280,7 +276,6 @@ def confirm_match_and_persist(
 ) -> RiskRecord:
     """
     Confirma o match escolhido pelo analista e actualiza o RiskRecord.
-
     Usa o campo 'confirmed_entity_id' definido em models.RiskRecord.
     """
     if chosen_candidate_id is not None:
