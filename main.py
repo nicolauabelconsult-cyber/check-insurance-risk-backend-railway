@@ -1,18 +1,21 @@
-# main.py
+# main.py – backend Check Insurance Risk
+
 from typing import List
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from users import router as users_router
-
-app.include_router(users_router, prefix="/api")
-
 
 from config import settings
-from models import User
 from database import Base, engine, get_db
+from models import (
+    User,
+    RiskRecord,
+    NormalizedEntity,
+    RiskLevel,
+    RiskDecision,
+)
 from risk_engine import (
     analyze_risk_request,
     confirm_match_and_persist,
@@ -23,10 +26,10 @@ from auth import (
     get_current_active_user,
     get_current_admin,
 )
+from users import router as users_router
 from schemas import (
     RiskCheckRequest,
     RiskCheckResponse,
-    MatchResult,
     ConfirmMatchRequest,
     RiskHistoryResponse,
     RiskHistoryItem,
@@ -40,10 +43,10 @@ from info_sources import router as info_sources_router
 from dashboard import router as dashboard_router
 from seed_admin import seed_default_admin
 
-
 # -------------------------------------------------------------------
 # APP & CORS
 # -------------------------------------------------------------------
+
 app = FastAPI(title=settings.PROJECT_NAME)
 
 app.add_middleware(
@@ -54,23 +57,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers externos
-app.include_router(auth_router, prefix=settings.API_PREFIX)
-app.include_router(info_sources_router, prefix=settings.API_PREFIX)
-app.include_router(dashboard_router, prefix=settings.API_PREFIX)
+# -------------------------------------------------------------------
+# DB INIT & STARTUP
+# -------------------------------------------------------------------
 
-# Criar tabelas
+# Criar tabelas na base de dados
 Base.metadata.create_all(bind=engine)
 
 
 @app.on_event("startup")
 def startup_event() -> None:
-    """Criar utilizador admin por defeito."""
+    """Criar utilizador admin por defeito (se não existir)."""
     db = next(get_db())
     try:
         seed_default_admin(db)
     finally:
         db.close()
+
+
+# -------------------------------------------------------------------
+# ROUTERS EXTERNOS
+# -------------------------------------------------------------------
+
+# Autenticação
+app.include_router(auth_router, prefix=settings.API_PREFIX)
+
+# Gestão de utilizadores
+app.include_router(users_router, prefix=settings.API_PREFIX)
+
+# Fontes de informação
+app.include_router(info_sources_router, prefix=settings.API_PREFIX)
+
+# Dashboard
+app.include_router(dashboard_router, prefix=settings.API_PREFIX)
 
 
 # -------------------------------------------------------------------
@@ -85,14 +104,13 @@ def risk_check(
 ) -> RiskCheckResponse:
     """
     Executa análise de risco:
-    - procura candidatos
-    - calcula score e nível
-    - grava RiskRecord
-    - devolve matches com match_score
+    - usa o motor (analyze_risk_request) para obter score / nível / candidatos
+    - grava RiskRecord na BD
+    - devolve matches com match_score para o frontend
     """
 
-    # 1) Pedir ao motor que faça a análise
-    result = analyze_risk_request(
+    # 1) Motor de risco
+    engine_result = analyze_risk_request(
         db=db,
         name=payload.name,
         nif=payload.nif,
@@ -101,28 +119,23 @@ def risk_check(
         nationality=payload.nationality,
     )
 
-    raw_candidates = result.get("candidates", []) or []
-    score = float(result.get("score") or 0.0)
-    level_enum = base_level_from_score(score)
-    level = level_enum.value
-    factors = result.get("factors", []) or []
+    score = float(engine_result.get("score") or 0.0)
+    level_str = str(engine_result.get("level") or "LOW")
+    factors = engine_result.get("factors", []) or []
+    candidates = engine_result.get("candidates", []) or []
 
-    # 2) Agregar candidatos com match_score
-    aggregated = aggregate_matches(raw_candidates, search={
-        "name": payload.name,
-        "nif": payload.nif,
-        "passport": payload.passport,
-        "resident_card": payload.resident_card,
-        "nationality": payload.nationality,
-    })
+    # Converter nível string → enum para decidir sugestão
+    try:
+        level_enum = RiskLevel(level_str)
+    except Exception:
+        level_enum = RiskLevel.LOW
 
-    # 3) Sugerir decisão
     if level_enum in (RiskLevel.HIGH, RiskLevel.CRITICAL):
         decision_suggested = RiskDecision.UNDER_INVESTIGATION.value
     else:
         decision_suggested = RiskDecision.APPROVED.value
 
-    # 4) Guardar o registo na BD
+    # 2) Guardar registo na BD
     record = RiskRecord(
         full_name=payload.name,
         nif=payload.nif,
@@ -130,12 +143,12 @@ def risk_check(
         resident_card=payload.resident_card,
         country=payload.nationality,
         score=int(score),
-        level=level,
+        level=level_str,
         decision=None,
         decision_notes=None,
         explanation={
             "factors": factors,
-            "candidates": aggregated,  # isto é óptimo para o PDF / detalhe
+            "candidates": candidates,
             "decision_suggested": decision_suggested,
         },
         analyst_id=current_user.id,
@@ -144,15 +157,15 @@ def risk_check(
     db.commit()
     db.refresh(record)
 
-    # 5) Preparar resposta para o frontend
+    # 3) Resposta para o frontend
+    # Pydantic converte automaticamente cada dict → CandidateMatch
     return RiskCheckResponse(
         score=score,
-        level=level,
+        level=level_str,
         factors=factors,
-        candidates=[
-            CandidateMatch(**c) for c in aggregated
-        ],
+        candidates=candidates,
     )
+
 
 @app.post(f"{settings.API_PREFIX}/risk/confirm-match")
 def confirm_match(
@@ -161,23 +174,26 @@ def confirm_match(
     current_user: User = Depends(get_current_active_user),
 ):
     """
-    Confirmar qual o match é o correcto e registar decisão final do analista.
-    (Por enquanto, o match_id não está ligado a uma entidade específica — simplificado.)
+    Confirma o match escolhido pelo analista. Neste momento apenas
+    associa o RiskRecord a uma NormalizedEntity (confirmed_entity_id).
     """
-    record = db.query(RiskRecord).filter(RiskRecord.id == payload.analysis_id).first()
+
+    record = (
+        db.query(RiskRecord)
+        .filter(RiskRecord.id == payload.risk_record_id)
+        .first()
+    )
     if not record:
         raise HTTPException(status_code=404, detail="Análise não encontrada.")
 
-    # TODO: mapear correctamente match_id -> NormalizedEntity.
-    entity = db.query(NormalizedEntity).first()
+    # Atualiza o registo com a entidade escolhida
+    confirm_match_and_persist(
+        db=db,
+        risk_record=record,
+        chosen_candidate_id=payload.chosen_candidate_id,
+    )
 
-    record.decision = payload.final_decision.value
-    record.decision_notes = payload.notes
-    if entity:
-        record.confirmed_entity_id = entity.id
-
-    db.commit()
-    return {"message": "Match confirmado e decisão registada."}
+    return {"message": "Match confirmado com sucesso."}
 
 
 @app.get(f"{settings.API_PREFIX}/risk/history", response_model=RiskHistoryResponse)
@@ -189,6 +205,7 @@ def risk_history(
     """
     Pesquisa histórico por nome / NIF / passaporte / cartão de residente.
     """
+
     q = f"%{query.upper()}%"
     records = (
         db.query(RiskRecord)
@@ -210,12 +227,16 @@ def risk_history(
                 data=r.created_at,
                 nome=r.full_name,
                 score=r.score,
-                nivel=RiskLevel(r.level),
-                decisao=RiskDecision(r.decision) if r.decision else None,  # type: ignore
+                nivel=r.level,          # string já compatível com schema
+                decisao=r.decision,     # idem
             )
         )
 
-    return RiskHistoryResponse(results=items)
+    return RiskHistoryResponse(
+        identifier=query,
+        results=items,
+        total=len(items),
+    )
 
 
 @app.get(f"{settings.API_PREFIX}/risk/{{risk_id}}", response_model=RiskDetailResponse)
@@ -227,10 +248,12 @@ def risk_detail(
     """
     Detalhe completo de uma análise – alimenta o relatório web.
     """
+
     r = db.query(RiskRecord).filter(RiskRecord.id == risk_id).first()
     if not r:
         raise HTTPException(status_code=404, detail="Análise não encontrada.")
 
+    # Cliente
     cliente = ClienteInfo(
         nome=r.full_name,
         nif=r.nif,
@@ -240,12 +263,15 @@ def risk_detail(
         endereco=None,
     )
 
-    fontes: List[FonteInfo] = []
-    principais_riscos = r.explanation or []
-    historico: List[HistoricoClienteItem] = []
-    relacoes: List[str] = []
+    # Explicação
+    exp = r.explanation or {}
+    if isinstance(exp, dict):
+        principais_riscos = exp.get("factors", []) or []
+    else:
+        principais_riscos = []
 
-    # Histórico simplificado: todas as análises com mesmo NIF ou nome
+    # Histórico simplificado
+    historico: List[HistoricoClienteItem] = []
     base_q = db.query(RiskRecord).filter(
         (RiskRecord.nif == r.nif) | (RiskRecord.full_name == r.full_name)
     )
@@ -255,22 +281,25 @@ def risk_detail(
                 data=h.created_at,
                 operacao="Análise de risco",
                 score=h.score,
-                nivel=RiskLevel(h.level),
-                decisao=RiskDecision(h.decision) if h.decision else None,  # type: ignore
+                nivel=h.level,
+                decisao=h.decision,
             )
         )
 
-    # Fontes simplificadas: se houver entidade confirmada, usa a sua fonte
+    # Fontes simplificadas: se houver entidade confirmada, pega a fonte
+    fontes: List[FonteInfo] = []
     if r.confirmed_entity_id:
-        entity = db.query(NormalizedEntity).filter(
-            NormalizedEntity.id == r.confirmed_entity_id
-        ).first()
+        entity = (
+            db.query(NormalizedEntity)
+            .filter(NormalizedEntity.id == r.confirmed_entity_id)
+            .first()
+        )
         if entity:
             fontes.append(
                 FonteInfo(
-                    tipo=entity.source_type,
+                    tipo=getattr(entity, "source_type", None),
                     ocorrencias=1,
-                    ultima_atualizacao=entity.created_at,
+                    ultima_atualizacao=getattr(entity, "created_at", None),
                 )
             )
 
@@ -279,13 +308,13 @@ def risk_detail(
         data_analise=r.created_at,
         analista=r.analyst.username if r.analyst else None,
         score=r.score,
-        nivel=RiskLevel(r.level),
-        decisao=RiskDecision(r.decision) if r.decision else None,  # type: ignore
+        nivel=r.level,
+        decisao=r.decision,
         cliente=cliente,
         fontes=fontes,
         principais_riscos=principais_riscos,
         historico_cliente=historico,
-        relacoes=relacoes,
+        relacoes=[],
         recomendacoes=r.decision_notes,
     )
 
@@ -314,3 +343,9 @@ def risk_export_excel(
     Exporta todas as análises em Excel.
     """
     return export_risk_excel(db)
+
+
+# Health-check simples (opcional)
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
