@@ -1,3 +1,5 @@
+# auth.py – versão limpa e compatível com o Settings actual
+
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -6,45 +8,46 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
-from config import settings
-SECRET_KEY = getattr(settings, "SECRET_KEY", "change-me")
 
+from config import settings
+from database import get_db
+from models import User, UserRole
+from schemas import Token, UserRead
+
+# -------------------------------------------------------------------
+# CONFIG JWT (compatível com vários formatos de Settings)
+# -------------------------------------------------------------------
+
+# Tenta primeiro SECRET_KEY; se não existir, tenta JWT_SECRET_KEY; se não existir, usa "change-me"
+SECRET_KEY = getattr(settings, "SECRET_KEY", getattr(settings, "JWT_SECRET_KEY", "change-me"))
+
+# Algoritmo: AUTH_ALGORITHM ou JWT_ALGORITHM, senão HS256
 ALGORITHM = getattr(
     settings,
-    "JWT_ALGORITHM",
-    getattr(settings, "AUTH_ALGORITHM", "HS256"),
+    "AUTH_ALGORITHM",
+    getattr(settings, "JWT_ALGORITHM", "HS256"),
 )
 
+# Tempo de expiração: se não existir no Settings, usa 12h
 ACCESS_TOKEN_EXPIRE_MINUTES = getattr(
     settings,
     "ACCESS_TOKEN_EXPIRE_MINUTES",
-    12 * 60,  # fallback: 12 horas
+    12 * 60,
 )
 
-from database import get_db
-from models import User, UserRole
-from schemas import Token, LoginRequest, UserRead, TokenData
-
-# -------------------------------------------------------
-# CONFIG JWT / PASSWORD
-# -------------------------------------------------------
-
-SECRET_KEY = settings.JWT_SECRET_KEY
-ALGORITHM = settings.JWT_ALGORITHM
-ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl=f"{settings.API_PREFIX}/auth/login"
-)
+# -------------------------------------------------------------------
+# OBJETOS AUXILIARES
+# -------------------------------------------------------------------
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
-# -------------------------------------------------------
-# UTILITÁRIOS DE PASSWORD
-# -------------------------------------------------------
+
+# -------------------------------------------------------------------
+# FUNÇÕES DE PASSWORD
+# -------------------------------------------------------------------
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
@@ -54,29 +57,24 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-# -------------------------------------------------------
+# -------------------------------------------------------------------
 # JWT
-# -------------------------------------------------------
+# -------------------------------------------------------------------
 
 def create_access_token(
-    data: dict, expires_delta: Optional[timedelta] = None
+    data: dict,
+    expires_delta: Optional[timedelta] = None,
 ) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (
-        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(
-        to_encode,
-        SECRET_KEY,
-        algorithm=ALGORITHM,
-    )
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
 
-# -------------------------------------------------------
-# HELPER PARA BUSCAR UTILIZADOR
-# -------------------------------------------------------
+# -------------------------------------------------------------------
+# UTILIZADORES
+# -------------------------------------------------------------------
 
 def get_user_by_username(db: Session, username: str) -> Optional[User]:
     return db.query(User).filter(User.username == username).first()
@@ -91,9 +89,9 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     return user
 
 
-# -------------------------------------------------------
-# DEPENDÊNCIAS DE AUTENTICAÇÃO
-# -------------------------------------------------------
+# -------------------------------------------------------------------
+# DEPENDÊNCIAS DE SEGURANÇA
+# -------------------------------------------------------------------
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -104,19 +102,13 @@ async def get_current_user(
         detail="Credenciais inválidas ou sessão expirada.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
     try:
-        payload = jwt.decode(
-            token,
-            SECRET_KEY,
-            algorithms=[ALGORITHM],
-        )
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
-        role: Optional[str] = payload.get("role")
+        role: str = payload.get("role")
         if username is None:
             raise credentials_exception
-
-        # Compatível com schemas.TokenData (mesmo que só tenha username)
-        _ = TokenData(username=username)
     except JWTError:
         raise credentials_exception
 
@@ -145,31 +137,24 @@ async def get_current_admin(
     return current_user
 
 
-# -------------------------------------------------------
+# -------------------------------------------------------------------
 # ROTAS
-# -------------------------------------------------------
+# -------------------------------------------------------------------
 
 @router.post("/login", response_model=Token)
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    """
-    Endpoint de login (username/password).
-
-    - Verifica credenciais
-    - Gera access_token JWT
-    """
-    user = db.query(User).filter(User.username == form_data.username).first()
-
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Utilizador ou password incorretos.",
+            detail="Utilizador ou palavra-passe incorrectos.",
         )
 
     access_token = create_access_token(
-        {"sub": user.username, "role": user.role}
+        {"sub": user.username, "role": user.role},
     )
 
     return {"access_token": access_token, "token_type": "bearer"}
@@ -177,9 +162,6 @@ def login(
 
 @router.get("/me", response_model=UserRead)
 def read_users_me(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
-    """
-    Devolve o utilizador actualmente autenticado.
-    """
     return current_user
