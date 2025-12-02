@@ -63,6 +63,34 @@ class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 # ============================================================
+# 2. UTILIZADOR
+# ============================================================
+
+class UserRead(BaseModel):
+    id: int
+    username: str
+    email: Optional[EmailStr] = None
+    full_name: Optional[str] = None
+    role: str
+    is_active: bool
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserCreate(BaseModel):
+    """
+    Payload usado em POST /api/users
+    (Admin → criar utilizador)
+    """
+    username: str
+    email: Optional[EmailStr] = None
+    full_name: Optional[str] = None
+    role: str          # "ADMIN" ou "ANALYST"
+    password: str
+
+
+# ============================================================
 # 3. FONTES DE INFORMAÇÃO
 # ============================================================
 
