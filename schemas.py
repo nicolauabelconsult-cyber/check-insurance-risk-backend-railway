@@ -137,12 +137,14 @@ class FonteInfo(BaseModel):
 class RiskCheckRequest(BaseModel):
     """
     Payload principal para o endpoint de análise de risco.
+    Compatível com o frontend actual.
     """
-    name: str
+    full_name: str
     nif: Optional[str] = None
     passport: Optional[str] = None
     resident_card: Optional[str] = None
-    nationality: Optional[str] = None
+    country: Optional[str] = None
+
 
 
 class CandidateMatch(BaseModel):
