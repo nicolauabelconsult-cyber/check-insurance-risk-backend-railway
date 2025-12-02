@@ -19,7 +19,6 @@ from models import (
 from risk_engine import (
     analyze_risk_request,
     confirm_match_and_persist,
-    get_history_for_identifier,
 )
 from auth import (
     router as auth_router,
@@ -43,6 +42,7 @@ from info_sources import router as info_sources_router
 from dashboard import router as dashboard_router
 from seed_admin import seed_default_admin
 
+
 # -------------------------------------------------------------------
 # APP & CORS
 # -------------------------------------------------------------------
@@ -56,6 +56,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # -------------------------------------------------------------------
 # DB INIT & STARTUP
@@ -82,7 +83,7 @@ def startup_event() -> None:
 # Autenticação
 app.include_router(auth_router, prefix=settings.API_PREFIX)
 
-# Gestão de utilizadores
+# Gestão de utilizadores (admin)
 app.include_router(users_router, prefix=settings.API_PREFIX)
 
 # Fontes de informação
@@ -112,11 +113,11 @@ def risk_check(
     # 1) Motor de risco
     engine_result = analyze_risk_request(
         db=db,
-        name=payload.name,
+        name=payload.full_name,      # <- usa full_name do schema
         nif=payload.nif,
         passport=payload.passport,
         resident_card=payload.resident_card,
-        nationality=payload.nationality,
+        nationality=payload.country,
     )
 
     score = float(engine_result.get("score") or 0.0)
@@ -137,11 +138,11 @@ def risk_check(
 
     # 2) Guardar registo na BD
     record = RiskRecord(
-        full_name=payload.name,
+        full_name=payload.full_name,
         nif=payload.nif,
         passport=payload.passport,
         resident_card=payload.resident_card,
-        country=payload.nationality,
+        country=payload.country,
         score=int(score),
         level=level_str,
         decision=None,
@@ -174,8 +175,8 @@ def confirm_match(
     current_user: User = Depends(get_current_active_user),
 ):
     """
-    Confirma o match escolhido pelo analista. Neste momento apenas
-    associa o RiskRecord a uma NormalizedEntity (confirmed_entity_id).
+    Confirma o match escolhido pelo analista.
+    Apenas associa o RiskRecord a uma NormalizedEntity (confirmed_entity_id).
     """
 
     record = (
@@ -186,7 +187,7 @@ def confirm_match(
     if not record:
         raise HTTPException(status_code=404, detail="Análise não encontrada.")
 
-    # Atualiza o registo com a entidade escolhida
+    # Actualiza o registo com a entidade escolhida
     confirm_match_and_persist(
         db=db,
         risk_record=record,
@@ -227,8 +228,8 @@ def risk_history(
                 data=r.created_at,
                 nome=r.full_name,
                 score=r.score,
-                nivel=r.level,          # string já compatível com schema
-                decisao=r.decision,     # idem
+                nivel=r.level,      # string já compatível com schema
+                decisao=r.decision, # idem
             )
         )
 
