@@ -39,6 +39,18 @@ class LoginRequest(BaseModel):
 # 2. UTILIZADOR
 # ============================================================
 
+class UserCreate(BaseModel):
+    """
+    Esquema usado no endpoint de criação de utilizadores (/api/users).
+    Alinha com o que o frontend envia: username, email, role, password.
+    """
+    username: str
+    email: Optional[EmailStr] = None
+    full_name: Optional[str] = None
+    role: str            # "ADMIN" ou "ANALYST"
+    password: str        # password inicial
+
+
 class UserRead(BaseModel):
     id: int
     username: str
@@ -48,9 +60,7 @@ class UserRead(BaseModel):
     is_active: bool
     created_at: Optional[datetime] = None
 
-    # Permite criar directamente a partir do modelo SQLAlchemy
     model_config = ConfigDict(from_attributes=True)
-
 
 # ============================================================
 # 3. FONTES DE INFORMAÇÃO
