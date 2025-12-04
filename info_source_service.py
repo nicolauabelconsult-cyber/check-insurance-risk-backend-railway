@@ -102,14 +102,26 @@ async def upload_info_source_excel(
 
     headers = [str(h).strip() if h else "" for h in rows[0]]
 
+    # tentar encontrar colunas pelo nome
     idx_name = _get_col_idx(headers, "name")
     idx_nif = _get_col_idx(headers, "nif")
     idx_passport = _get_col_idx(headers, "passport")
     idx_res_card = _get_col_idx(headers, "resident_card")
     idx_country = _get_col_idx(headers, "country")
 
+    # SE não houver coluna "name", usamos a primeira coluna não vazia
     if idx_name is None:
-        raise HTTPException(400, "A coluna 'name' é obrigatória.")
+        for i, h in enumerate(headers):
+            if h:
+                idx_name = i
+                break
+
+    if idx_name is None:
+        # mesmo assim não temos nenhuma coluna utilizável
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Não foi possível identificar uma coluna de nomes no Excel.",
+        )
 
     # Criar a fonte
     source = InfoSource(name=name, description=description)
