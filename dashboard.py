@@ -1,5 +1,5 @@
-# app/dashboard.py
-from datetime import datetime, date
+# dashboard.py
+from datetime import date
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func
@@ -7,18 +7,18 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_active_user
 from database import get_db
-from models import RiskRecord, RiskLevel, User
+from models import RiskRecord, RiskLevel, RiskDecision, User
 from schemas import DashboardStats, RiskHistoryItem
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
-@router.get("/stats", response_model=DashboardStats)
-def get_stats(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-):
+def _build_stats(db: Session) -> DashboardStats:
+    """Função interna que calcula as estatísticas do dashboard."""
+
     today = date.today()
+
+    # total de análises de hoje
     total_hoje = (
         db.query(func.count(RiskRecord.id))
         .filter(func.date(RiskRecord.created_at) == today)
@@ -26,15 +26,21 @@ def get_stats(
         or 0
     )
 
+    # casos HIGH ou CRITICAL
     casos_altos = (
         db.query(func.count(RiskRecord.id))
-        .filter(RiskRecord.level.in_([RiskLevel.HIGH.value, RiskLevel.CRITICAL.value]))
+        .filter(
+            RiskRecord.level.in_(
+                [RiskLevel.HIGH.value, RiskLevel.CRITICAL.value]
+            )
+        )
         .scalar()
         or 0
     )
 
-    tempo_medio = 0.0  # se houver timestamps de fim de análise podemos calcular melhor
+    tempo_medio = 0.0  # placeholder – se tiveres timestamps de fim, calculas aqui
 
+    # últimas 10 análises
     ultimas = (
         db.query(RiskRecord)
         .order_by(RiskRecord.created_at.desc())
@@ -50,8 +56,8 @@ def get_stats(
                 data=r.created_at,
                 nome=r.full_name,
                 score=r.score,
-                nivel=RiskLevel(r.level),
-                decisao=RiskDecision(r.decision) if r.decision else None,  # type: ignore
+                nivel=r.level,
+                decisao=r.decision,
             )
         )
 
@@ -61,3 +67,24 @@ def get_stats(
         tempo_medio_analise_segundos=tempo_medio,
         ultimas_analises=ultimas_items,
     )
+
+
+@router.get("/stats", response_model=DashboardStats)
+def get_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Endpoint interno (podes usar se quiseres)."""
+    return _build_stats(db)
+
+
+@router.get("/summary", response_model=DashboardStats)
+def get_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Endpoint que o FRONTEND usa:
+    GET /api/dashboard/summary
+    """
+    return _build_stats(db)
