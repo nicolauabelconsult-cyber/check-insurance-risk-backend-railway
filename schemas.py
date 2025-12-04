@@ -62,6 +62,13 @@ class UserRead(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class UserCreate(BaseModel):
+    username: str
+    email: Optional[EmailStr] = None
+    full_name: Optional[str] = None
+    password: str
+    role: str
+
 # ============================================================
 # 2. UTILIZADOR
 # ============================================================
