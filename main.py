@@ -5,12 +5,10 @@ from database import Base, engine
 from users import router as users_router
 from info_sources import router as info_sources_router
 from dashboard import router as dashboard_router
-from risk_engine import router as risk_router
 from reporting import router as reporting_router
+# from risk_engine import router as risk_router  # ❌ REMOVIDO
 
-# Criar tabelas (caso não existam)
 Base.metadata.create_all(bind=engine)
-
 
 app = FastAPI(
     title="Check Insurance Risk API",
@@ -18,37 +16,21 @@ app = FastAPI(
     description="Backend para o sistema de gestão e análise de risco."
 )
 
-
-# ------------------------------------------------------------
-# CORS – permitir acesso do frontend
-# ------------------------------------------------------------
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # podes restringir depois
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# ------------------------------------------------------------
-# Prefixo /api — compatível com o frontend
-# ------------------------------------------------------------
-
+# Prefixo /api
 app.include_router(users_router, prefix="/api")
 app.include_router(info_sources_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
-app.include_router(risk_router, prefix="/api")
 app.include_router(reporting_router, prefix="/api")
-
-
-# ------------------------------------------------------------
-# Rota raiz
-# ------------------------------------------------------------
+# app.include_router(risk_router, prefix="/api")  # ❌ REMOVIDO
 
 @app.get("/")
 def root():
     return {"message": "API Online — Check Insurance Risk"}
-
-
