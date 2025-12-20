@@ -32,4 +32,3 @@ app.include_router(dashboard_router, prefix="/api")
 @app.get("/")
 def root():
     return {"message": "API Online — Check Insurance Risk"}
-
