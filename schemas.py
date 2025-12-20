@@ -36,19 +36,23 @@ class LoginRequest(BaseModel):
 
 
 # ============================================================
-# 2. UTILIZADOR
+# 2. UTILIZADOR — (VERSÃO FINAL COMPATÍVEL COM FRONTEND)
 # ============================================================
 
 class UserCreate(BaseModel):
     """
-    Esquema usado no endpoint de criação de utilizadores (/api/users).
-    Alinha com o que o frontend envia: username, email, role, password.
+    Payload usado no endpoint de criação de utilizadores (/api/users).
+    Alinhado com o que o frontend envia:
+      - username
+      - email
+      - password
+      - role ("ADMIN" ou "ANALYST")
     """
     username: str
     email: Optional[EmailStr] = None
     full_name: Optional[str] = None
-    role: str            # "ADMIN" ou "ANALYST"
-    password: str        # password inicial
+    password: str
+    role: str
 
 
 class UserRead(BaseModel):
@@ -61,40 +65,6 @@ class UserRead(BaseModel):
     created_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
-
-class UserCreate(BaseModel):
-    username: str
-    email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    password: str
-    role: str
-
-# ============================================================
-# 2. UTILIZADOR
-# ============================================================
-
-class UserRead(BaseModel):
-    id: int
-    username: str
-    email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    role: str
-    is_active: bool
-    created_at: Optional[datetime] = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class UserCreate(BaseModel):
-    """
-    Payload usado em POST /api/users
-    (Admin → criar utilizador)
-    """
-    username: str
-    email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    role: str          # "ADMIN" ou "ANALYST"
-    password: str
 
 
 # ============================================================
@@ -110,7 +80,6 @@ class InfoSourceRead(BaseModel):
     description: Optional[str] = None
     created_at: Optional[datetime] = None
 
-    # Campos extra são ignorados para não rebentar
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
@@ -123,12 +92,10 @@ class FonteInfo(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
 
-    # Campos mais "funcionais" usados no main.py / reporting
     tipo: Optional[str] = None
     ocorrencias: Optional[int] = None
     ultima_atualizacao: Optional[datetime] = None
 
-    # Outros campos possíveis vindos do modelo InfoSource
     source_type: Optional[str] = None
     country: Optional[str] = None
     url: Optional[str] = None
@@ -142,10 +109,6 @@ class FonteInfo(BaseModel):
 # ============================================================
 
 class RiskCheckRequest(BaseModel):
-    """
-    Payload principal para o endpoint de análise de risco.
-    Compatível com o frontend actual.
-    """
     full_name: str
     nif: Optional[str] = None
     passport: Optional[str] = None
@@ -153,11 +116,7 @@ class RiskCheckRequest(BaseModel):
     country: Optional[str] = None
 
 
-
 class CandidateMatch(BaseModel):
-    """
-    Representa um candidato devolvido pelo motor de risco.
-    """
     id: Optional[int] = None
     name: Optional[str] = None
     normalized_name: Optional[str] = None
@@ -170,10 +129,6 @@ class CandidateMatch(BaseModel):
 
 
 class RiskCheckResponse(BaseModel):
-    """
-    Resposta padrão do endpoint de análise de risco.
-    Minimal, compatível com o frontend actual.
-    """
     score: float
     level: str
     factors: List[str] = []
@@ -181,18 +136,11 @@ class RiskCheckResponse(BaseModel):
 
 
 class MatchResult(BaseModel):
-    """
-    Mantido por compatibilidade com versões antigas.
-    Se não for usado, não faz mal ficar aqui.
-    """
     total: int
     candidates: List[CandidateMatch] = []
 
 
 class ConfirmMatchRequest(BaseModel):
-    """
-    Payload para o endpoint de confirmação de match.
-    """
     risk_record_id: int
     chosen_candidate_id: Optional[int] = None
 
@@ -202,12 +150,8 @@ class ConfirmMatchRequest(BaseModel):
 # ============================================================
 
 class RiskHistoryItem(BaseModel):
-    """
-    Um registo individual de histórico de risco.
-    Campos genéricos, para funcionar com várias versões do main.py.
-    """
     id: Optional[int] = None
-    analysis_id: Optional[int] = None  # em algumas versões
+    analysis_id: Optional[int] = None
     data: Optional[datetime] = None
     nome: Optional[str] = None
     score: Optional[float] = None
@@ -218,9 +162,6 @@ class RiskHistoryItem(BaseModel):
 
 
 class HistoricoClienteItem(BaseModel):
-    """
-    Item específico usado em risk_detail para histórico do cliente.
-    """
     data: Optional[datetime] = None
     operacao: Optional[str] = None
     score: Optional[float] = None
@@ -231,10 +172,6 @@ class HistoricoClienteItem(BaseModel):
 
 
 class RiskHistoryResponse(BaseModel):
-    """
-    Resposta para endpoints de histórico.
-    Suporta tanto 'history' como 'results'.
-    """
     identifier: Optional[str] = None
     history: List[RiskHistoryItem] = []
     results: List[RiskHistoryItem] = []
@@ -246,24 +183,15 @@ class RiskHistoryResponse(BaseModel):
 # ============================================================
 
 class ClienteInfo(BaseModel):
-    """
-    Informação básica sobre o cliente / segurado.
-
-    Inclui campos em português e inglês para ser tolerante a
-    diferentes versões de main.py / reporting.
-    """
-    # nomes
     name: Optional[str] = None
     nome: Optional[str] = None
 
-    # identificadores
     nif: Optional[str] = None
     passport: Optional[str] = None
     passaporte: Optional[str] = None
     resident_card: Optional[str] = None
     cartao_residente: Optional[str] = None
 
-    # país / nacionalidade
     nationality: Optional[str] = None
     nacionalidade: Optional[str] = None
 
@@ -274,23 +202,6 @@ class ClienteInfo(BaseModel):
 
 
 class RiskDetailResponse(BaseModel):
-    """
-    Detalhe de uma análise de risco específica.
-
-    Compatível com o que o main.py monta em risk_detail:
-    - id
-    - data_analise
-    - analista
-    - score
-    - nivel
-    - decisao
-    - cliente (ClienteInfo)
-    - fontes (List[FonteInfo])
-    - principais_riscos (lista de strings)
-    - historico_cliente (List[HistoricoClienteItem])
-    - relacoes (lista de strings)
-    - recomendacoes (texto)
-    """
     id: Optional[int] = None
     data_analise: Optional[datetime] = None
     analista: Optional[str] = None
@@ -304,74 +215,13 @@ class RiskDetailResponse(BaseModel):
     historico_cliente: List[HistoricoClienteItem] = []
     relacoes: List[str] = []
     recomendacoes: Optional[str] = None
-# ============================================================
-# 2. UTILIZADOR
-# ============================================================
 
-class UserCreate(BaseModel):
-    """
-    Esquema usado no endpoint de criação de utilizadores (/api/users).
-    Deve alinhar com o JSON que o frontend envia.
-    """
-    username: str
-    email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    role: str
-    password: str
-
-
-class UserRead(BaseModel):
-    id: int
-    username: str
-    email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    role: str
-    is_active: bool
-    created_at: Optional[datetime] = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-# ============================================================
-# 2. UTILIZADOR
-# ============================================================
-
-class UserRead(BaseModel):
-    id: int
-    username: str
-    email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    role: str
-    is_active: bool
-    created_at: Optional[datetime] = None
-
-    # Permite criar directamente a partir do modelo SQLAlchemy
-    model_config = ConfigDict(from_attributes=True)
-
-
-class UserCreate(BaseModel):
-    """
-    Payload para criação de utilizadores via /api/users.
-    Compatível com o ecrã de Administração:
-      - Nome (full_name)
-      - Email
-      - Password inicial
-      - Perfil (role: ADMIN / ANALYST)
-    """
-    full_name: str
-    email: EmailStr
-    username: str
-    initial_password: str
-    role: str  # "ADMIN" ou "ANALYST"
 
 # ============================================================
 # 7. DASHBOARD
 # ============================================================
 
 class DashboardStats(BaseModel):
-    """
-    Estatísticas gerais para o dashboard.
-    Campos todos opcionais para não rebentar se algo mudar.
-    """
     total_clients: Optional[int] = None
     total_risk_records: Optional[int] = None
     high_risk_count: Optional[int] = None
@@ -380,7 +230,7 @@ class DashboardStats(BaseModel):
     total_info_sources: Optional[int] = None
     last_analysis_at: Optional[datetime] = None
 
-    # Versão alternativa baseada no get_dashboard_stats() que mostraste
+    # Versão alternativa
     total_analises_hoje: Optional[int] = None
     casos_high_critical: Optional[int] = None
     tempo_medio_analise_segundos: Optional[float] = None
