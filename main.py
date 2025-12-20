@@ -5,8 +5,7 @@ from database import Base, engine
 from users import router as users_router
 from info_sources import router as info_sources_router
 from dashboard import router as dashboard_router
-# from reporting import router as reporting_router   # ❌ REMOVIDO
-# from risk_engine import router as risk_router      # ❌ REMOVIDO
+from auth import router as auth_router  # ✅ ADICIONADO
 
 Base.metadata.create_all(bind=engine)
 
@@ -24,13 +23,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Rotas principais com /api
+# Prefixo /api
+app.include_router(auth_router, prefix="/api")           # ✅ LOGIN FUNCIONA
 app.include_router(users_router, prefix="/api")
 app.include_router(info_sources_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
-# app.include_router(reporting_router, prefix="/api")  # ❌ REMOVIDO
-# app.include_router(risk_router, prefix="/api")       # ❌ REMOVIDO
 
 @app.get("/")
 def root():
     return {"message": "API Online — Check Insurance Risk"}
+
