@@ -197,3 +197,10 @@ def dashboard_stats(_user: User = Depends(get_current_user), db: Session = Depen
         "low_risk": 0,
         "critical_risk": 0,
     }
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+@app.get("/version")
+def version():
+    return {"version": "1.0.0"}
