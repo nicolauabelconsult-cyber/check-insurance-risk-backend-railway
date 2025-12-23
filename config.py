@@ -4,6 +4,9 @@ import os
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "Qwerty!080397"
 
+# ✅ ESTA LINHA FALTAVA
+DATABASE_URL = os.getenv("DATABASE_URL")  # Render define isto quando usas Postgres
+
 CORS_ORIGINS_LIST = [
     "https://checkinsurancerisk.com",
     "https://www.checkinsurancerisk.com",
