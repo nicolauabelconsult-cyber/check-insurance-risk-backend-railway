@@ -28,11 +28,11 @@ app.add_middleware(
 def startup():
     Base.metadata.create_all(bind=engine)
 
-    # Seed admin
     from database import SessionLocal
     db = SessionLocal()
     try:
         admin = db.scalar(select(User).where(User.username == ADMIN_USERNAME))
+
         if not admin:
             db.add(User(
                 username=ADMIN_USERNAME,
@@ -43,12 +43,14 @@ def startup():
                 is_active=True,
             ))
             db.commit()
+        else:
+            # força alinhar a password com o código
+            admin.hashed_password = hash_password(ADMIN_PASSWORD)
+            admin.is_active = True
+            db.add(admin)
+            db.commit()
     finally:
         db.close()
-
-@app.get("/")
-def root():
-    return {"message": "API Online — Check Insurance Risk"}
 
 # -------------------------
 # AUTH
