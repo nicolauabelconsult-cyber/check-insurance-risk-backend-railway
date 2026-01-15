@@ -1,16 +1,10 @@
-import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from config import DATABASE_URL
 
-def _sqlite_url():
-    # local dev fallback
-    return "sqlite:///./app.db"
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
-DB_URL = DATABASE_URL or _sqlite_url()
-
-connect_args = {"check_same_thread": False} if DB_URL.startswith("sqlite") else {}
-engine = create_engine(DB_URL, pool_pre_ping=True, connect_args=connect_args)
+engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
