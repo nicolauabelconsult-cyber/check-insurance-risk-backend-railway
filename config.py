@@ -1,18 +1,24 @@
-# config.py
 import os
 
+APP_NAME = "Check Insurance Risk API"
+
+# SUPER ADMIN (seed)
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "Qwerty!080397"
 
-DATABASE_URL = os.getenv("DATABASE_URL")  # Render/Postgres (opcional)
+# SECURITY
+SECRET_KEY = os.getenv("SECRET_KEY", "change-this-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 480
 
-ACCESS_TOKEN_EXPIRE_HOURS = int(os.getenv("ACCESS_TOKEN_EXPIRE_HOURS", "12"))
+# DATABASE
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
 
-CORS_ORIGINS_LIST = [
+# CORS
+CORS_ORIGINS = [
+    "http://localhost:5173",
     "https://checkinsurancerisk.com",
     "https://www.checkinsurancerisk.com",
-    "http://localhost:5173",
 ]
 
 UPLOAD_DIR = "/tmp/uploads"
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-later")
