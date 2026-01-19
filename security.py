@@ -1,13 +1,27 @@
 from datetime import datetime, timedelta
-from jose import jwt
 from passlib.context import CryptContext
+from jose import jwt
+
 from config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 
 pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-def hash_password(p): return pwd.hash(p)
-def verify_password(p, h): return pwd.verify(p, h)
+def _bcrypt_safe(p: str) -> str:
+    if not p:
+        return ""
+    b = p.encode("utf-8")
+    return b[:72].decode("utf-8", errors="ignore")
 
-def create_token(user_id: int):
-    exp = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    return jwt.encode({"sub": str(user_id), "exp": exp}, SECRET_KEY, algorithm=ALGORITHM)
+def hash_password(p: str) -> str:
+    return pwd.hash(_bcrypt_safe(p))
+
+def verify_password(p: str, hashed: str) -> bool:
+    return pwd.verify(_bcrypt_safe(p), hashed)
+
+def create_token(user_id: int) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload = {
+        "sub": str(user_id),
+        "exp": expire,
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
