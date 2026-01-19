@@ -13,7 +13,6 @@ from models import User, Entity, InfoSource, Analysis
 from security import hash_password, verify_password, create_token
 from deps import get_db, current_user, require_roles
 from schemas import TokenOut, UserRead, EntityCreate, UserCreate, AnalysisCreate, AnalysisRead
-from audit import audit  # (podes usar mais tarde)
 
 app = FastAPI(title=APP_NAME)
 
