@@ -7,7 +7,7 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "Qwerty!080397"
 
 # SECURITY
-SECRET_KEY = os.getenv("SECRET_KEY", "change-this-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-later")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 480
 
