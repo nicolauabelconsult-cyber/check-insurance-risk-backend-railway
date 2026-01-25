@@ -20,3 +20,31 @@ app.include_router(users.router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+from sqlalchemy.orm import Session
+from .db import SessionLocal
+from .models import User, UserRole, UserStatus
+from .security import hash_password
+from .settings import settings
+import uuid
+
+@app.on_event("startup")
+def seed_superadmin():
+    db: Session = SessionLocal()
+    try:
+        exists = db.query(User).filter(User.email == settings.SUPERADMIN_EMAIL).first()
+        if not exists:
+            u = User(
+                id=str(uuid.uuid4()),
+                name=settings.SUPERADMIN_NAME,
+                email=settings.SUPERADMIN_EMAIL,
+                password_hash=hash_password(settings.SUPERADMIN_PASSWORD),
+                role=UserRole.SUPER_ADMIN,
+                status=UserStatus.ACTIVE,
+                entity_id=None,
+            )
+            db.add(u)
+            db.commit()
+    finally:
+        db.close()
+
