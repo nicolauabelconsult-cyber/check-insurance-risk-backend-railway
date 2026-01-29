@@ -2,7 +2,7 @@ import uuid
 from sqlalchemy.orm import Session
 from .models import AuditLog
 
-def log(db: Session, action: str, actor, entity, target_ref: str | None = None, meta: dict | None = None):
+def log(db: Session, action: str, actor=None, entity=None, target_ref: str | None = None, meta: dict | None = None):
     rec = AuditLog(
         id=str(uuid.uuid4()),
         action=action,
