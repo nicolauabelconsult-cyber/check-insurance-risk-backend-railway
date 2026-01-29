@@ -1,9 +1,10 @@
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
+
 from .db import get_db
 from .security import decode_token
-from .models import User, UserStatus
+from .models import User, UserStatus, UserRole
 from .rbac import has_perm
 
 bearer = HTTPBearer()
@@ -32,3 +33,6 @@ def require_perm(perm: str):
             raise HTTPException(status_code=403, detail="Forbidden")
         return u
     return checker
+
+def is_admin(u: User) -> bool:
+    return u.role in {UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.CLIENT_ADMIN}
