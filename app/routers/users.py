@@ -1,23 +1,26 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+
 from ..db import get_db
-from ..deps import get_current_user, require_perm
+from ..deps import require_perm
 from ..models import User, Entity, UserRole, UserStatus
-from ..schemas import UserOut, UserCreate, UserEntity
+from ..schemas import UserOut, UserCreate, UserUpdate, ResetPasswordIn, UserEntity
 from ..security import hash_password
 from ..audit import log
 
 router = APIRouter(prefix="/users", tags=["users"])
 
+def _scope_query(q, current: User):
+    if current.role in {UserRole.SUPER_ADMIN, UserRole.ADMIN}:
+        return q
+    return q.filter(User.entity_id == current.entity_id)
+
 @router.get("", response_model=list[UserOut])
 def list_users(db: Session = Depends(get_db), u=Depends(require_perm("users:read"))):
-    q = db.query(User)
-    # scoping por entidade (cliente só vê a sua)
-    if u.role not in {UserRole.SUPER_ADMIN, UserRole.ADMIN}:
-        q = q.filter(User.entity_id == u.entity_id)
-
+    q = _scope_query(db.query(User), u)
     users = q.order_by(User.name.asc()).all()
+
     out = []
     for x in users:
         ent = x.entity
@@ -33,7 +36,6 @@ def create_user(body: UserCreate, db: Session = Depends(get_db), u=Depends(requi
     if not ent:
         raise HTTPException(status_code=400, detail="Invalid entity_id")
 
-    # clientes não podem criar users de outras entidades
     if u.role not in {UserRole.SUPER_ADMIN, UserRole.ADMIN} and body.entity_id != u.entity_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -56,10 +58,61 @@ def create_user(body: UserCreate, db: Session = Depends(get_db), u=Depends(requi
     log(db, "USER_CREATED", actor=u, entity=ent, target_ref=body.email, meta={"role": body.role})
 
     return UserOut(
-        id=new_user.id,
-        name=new_user.name,
-        email=new_user.email,
-        role=new_user.role.value,
-        status=new_user.status.value,
+        id=new_user.id, name=new_user.name, email=new_user.email,
+        role=new_user.role.value, status=new_user.status.value,
         entity=UserEntity(id=ent.id, name=ent.name),
     )
+
+@router.patch("/{user_id}", response_model=UserOut)
+def update_user(user_id: str, body: UserUpdate, db: Session = Depends(get_db), u=Depends(require_perm("users:update"))):
+    q = _scope_query(db.query(User), u)
+    target = q.filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if body.name is not None:
+        target.name = body.name
+    if body.role is not None:
+        # clientes não podem promover para SUPER_ADMIN/ADMIN
+        if u.role not in {UserRole.SUPER_ADMIN, UserRole.ADMIN} and body.role in {UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value}:
+            raise HTTPException(status_code=403, detail="Forbidden role")
+        target.role = UserRole(body.role)
+    if body.status is not None:
+        target.status = UserStatus(body.status)
+
+    db.commit()
+    log(db, "USER_UPDATED", actor=u, entity=target.entity, target_ref=target.email)
+    ent = target.entity
+    return UserOut(
+        id=target.id, name=target.name, email=target.email,
+        role=target.role.value, status=target.status.value,
+        entity=UserEntity(id=ent.id, name=ent.name) if ent else None
+    )
+
+@router.post("/{user_id}/disable", response_model=UserOut)
+def disable_user(user_id: str, db: Session = Depends(get_db), u=Depends(require_perm("users:disable"))):
+    q = _scope_query(db.query(User), u)
+    target = q.filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Not found")
+    target.status = UserStatus.DISABLED
+    db.commit()
+    log(db, "USER_DISABLED", actor=u, entity=target.entity, target_ref=target.email)
+    ent = target.entity
+    return UserOut(
+        id=target.id, name=target.name, email=target.email,
+        role=target.role.value, status=target.status.value,
+        entity=UserEntity(id=ent.id, name=ent.name) if ent else None
+    )
+
+@router.post("/{user_id}/reset-password")
+def reset_password(user_id: str, body: ResetPasswordIn, db: Session = Depends(get_db), u=Depends(require_perm("users:reset_password"))):
+    q = _scope_query(db.query(User), u)
+    target = q.filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    target.password_hash = hash_password(body.new_password)
+    db.commit()
+    log(db, "USER_PASSWORD_RESET", actor=u, entity=target.entity, target_ref=target.email)
+    return {"ok": True}
