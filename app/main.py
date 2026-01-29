@@ -2,9 +2,10 @@ import uuid
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import ProgrammingError
 
 from .settings import settings
-from .db import Base, engine, SessionLocal
+from .db import SessionLocal
 from .models import User, UserRole, UserStatus
 from .security import hash_password
 from .deps import get_current_user
@@ -17,7 +18,7 @@ app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_list(),
+    allow_origins=settings.cors_list(),  # garante que inclui localhost + checkinsurancerisk.com + www
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -30,6 +31,10 @@ app.include_router(sources.router)
 app.include_router(risks.router)
 app.include_router(audit.router)
 
+@app.get("/")
+def root():
+    return {"service": settings.APP_NAME, "status": "ok"}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -38,24 +43,37 @@ def health():
 def me(u=Depends(get_current_user)):
     ent = u.entity
     return UserOut(
-        id=u.id, name=u.name, email=u.email, role=u.role.value, status=u.status.value,
-        entity=UserEntity(id=ent.id, name=ent.name) if ent else None
+        id=u.id,
+        name=u.name,
+        email=u.email,
+        role=u.role.value,
+        status=u.status.value,
+        entity=UserEntity(id=ent.id, name=ent.name) if ent else None,
     )
 
 @app.on_event("startup")
 def on_startup():
-    # cria tabelas automaticamente (evita 100% dos erros de “relation users does not exist”)
-    Base.metadata.create_all(bind=engine)
-
+    """
+    IMPORTANTE:
+    - NÃO criar tabelas aqui (removeu Base.metadata.create_all).
+    - Em produção no Render, as tabelas devem ser criadas via Alembic:
+      start command: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    """
     db: Session = SessionLocal()
     try:
-        exists = db.query(User).filter(User.email == settings.SUPERADMIN_EMAIL).first()
+        # Se migrations ainda não correram e a tabela users não existir, não quebra o startup
+        try:
+            exists = db.query(User).filter(User.email == settings.SUPERADMIN_EMAIL).first()
+        except ProgrammingError:
+            return
+
         if not exists:
             u = User(
                 id=str(uuid.uuid4()),
                 name=settings.SUPERADMIN_NAME,
                 email=settings.SUPERADMIN_EMAIL,
-                password_hash=hash_password(settings.SUPERADMIN_PASSWORD),
+                # proteção (caso uses bcrypt no futuro): bcrypt tem limite ~72 bytes
+                password_hash=hash_password((settings.SUPERADMIN_PASSWORD or "")[:72]),
                 role=UserRole.SUPER_ADMIN,
                 status=UserStatus.ACTIVE,
                 entity_id=None,
