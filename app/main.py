@@ -1,7 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from .settings import settings
 from .routers import auth, entities, users
+
+from sqlalchemy.orm import Session
+from .db import SessionLocal, Base, engine
+from . import models  # IMPORTANTE: garante que as tabelas estão no metadata
+from .models import User, UserRole, UserStatus
+from .security import hash_password
+import uuid
 
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 
@@ -17,18 +25,17 @@ app.include_router(auth.router)
 app.include_router(entities.router)
 app.include_router(users.router)
 
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-from sqlalchemy.orm import Session
-from .db import SessionLocal
-from .models import User, UserRole, UserStatus
-from .security import hash_password
-from .settings import settings
-import uuid
 
-@app.on_event("startup")
+def ensure_tables():
+    # Cria tabelas se ainda não existirem
+    Base.metadata.create_all(bind=engine)
+
+
 def seed_superadmin():
     db: Session = SessionLocal()
     try:
@@ -48,3 +55,8 @@ def seed_superadmin():
     finally:
         db.close()
 
+
+@app.on_event("startup")
+def on_startup():
+    ensure_tables()
+    seed_superadmin()
