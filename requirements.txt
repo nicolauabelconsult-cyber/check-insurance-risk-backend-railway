@@ -9,3 +9,4 @@ email-validator==2.2.0
 passlib==1.7.4
 python-jose==3.3.0
 reportlab==4.2.5
+alembic==1.14.0
