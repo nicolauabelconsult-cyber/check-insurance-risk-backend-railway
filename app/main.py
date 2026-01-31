@@ -77,16 +77,15 @@ def on_startup():
     try:
         # Se migrations ainda não correram e a tabela users não existe, não quebra o startup
         try:
-            exists = db.query(User).filter(User.email == settings.SUPERADMIN_EMAIL).first()
+            u = db.query(User).filter(User.email == settings.SUPERADMIN_EMAIL).first()
         except ProgrammingError:
             return
 
-        if not exists:
+        if not u:
             u = User(
                 id=str(uuid.uuid4()),
                 name=settings.SUPERADMIN_NAME,
                 email=settings.SUPERADMIN_EMAIL,
-                # segurança extra (se algum dia trocar para bcrypt: limite ~72 chars)
                 password_hash=hash_password((settings.SUPERADMIN_PASSWORD or "")[:72]),
                 role=UserRole.SUPER_ADMIN,
                 status=UserStatus.ACTIVE,
@@ -95,5 +94,11 @@ def on_startup():
             db.add(u)
             db.commit()
             log(db, "SUPERADMIN_CREATED", actor=u, entity=None, target_ref=u.email)
+        else:
+            # ✅ IMPORTANTE: garante que a password do Render é a password que fica na BD
+            u.password_hash = hash_password((settings.SUPERADMIN_PASSWORD or "")[:72])
+            db.commit()
+            log(db, "SUPERADMIN_PASSWORD_RESET", actor=u, entity=None, target_ref=u.email)
+
     finally:
         db.close()
