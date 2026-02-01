@@ -1,7 +1,7 @@
 import time
 from typing import Any, Dict, Optional
 
-import jwt
+from jose import jwt
 from passlib.context import CryptContext
 from .settings import settings
 
@@ -32,7 +32,7 @@ def create_token(
 
     payload: Dict[str, Any] = {
         "sub": sub,
-        "type": token_type,     # ✅ o deps.py espera isto
+        "type": token_type,
         "role": role,
         "entity_id": entity_id,
         "iat": now,
@@ -43,3 +43,4 @@ def create_token(
 
 def decode_token(token: str) -> Dict[str, Any]:
     return jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+
