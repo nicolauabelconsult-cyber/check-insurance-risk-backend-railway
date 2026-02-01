@@ -21,20 +21,17 @@ def get_current_user(
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    # ✅ aqui depende do teu create_token
-    user_id = payload.get("sub")
-    token_type = payload.get("type")  # se estiveres a gravar "type" no token
-
-    # se tiveres "type" no token, valida:
+    # se o token tiver type, valida
+    token_type = payload.get("type")
     if token_type and token_type != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
 
+    user_id = payload.get("sub")
     u = db.get(User, user_id)
     if not u or u.status != UserStatus.ACTIVE:
         raise HTTPException(status_code=401, detail="User disabled")
 
     return u
-
 
 def require_perm(perm: str):
     def checker(u: User = Depends(get_current_user)):
