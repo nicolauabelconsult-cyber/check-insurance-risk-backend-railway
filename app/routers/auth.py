@@ -19,8 +19,21 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     ent = u.entity
-access = create_token(u.id, "access", minutes=settings.JWT_ACCESS_MINUTES)
-refresh = create_token(u.id, "refresh", days=settings.JWT_REFRESH_DAYS)
+access = create_token(
+    sub=u.id,
+    token_type="access",
+    role=u.role.value,
+    entity_id=u.entity_id,
+    expires_minutes=settings.JWT_ACCESS_MINUTES,
+)
+
+refresh = create_token(
+    sub=u.id,
+    token_type="refresh",
+    role=u.role.value,
+    entity_id=u.entity_id,
+    refresh_days=settings.JWT_REFRESH_DAYS,
+)
 
     out = UserOut(
         id=u.id, name=u.name, email=u.email, role=u.role.value, status=u.status.value,
