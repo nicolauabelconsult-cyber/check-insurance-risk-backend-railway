@@ -64,14 +64,12 @@ def me(u=Depends(get_current_user)):
         entity=UserEntity(id=ent.id, name=ent.name) if ent else None,
     )
 
-
 @app.on_event("startup")
 def on_startup():
     """
     Em produção (Render):
     - As tabelas devem ser criadas via Alembic:
-      Start Command:
-        alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+      alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     """
     db: Session = SessionLocal()
     try:
@@ -81,6 +79,7 @@ def on_startup():
         except ProgrammingError:
             return
 
+        # cria o superadmin uma única vez
         if not u:
             u = User(
                 id=str(uuid.uuid4()),
@@ -94,11 +93,6 @@ def on_startup():
             db.add(u)
             db.commit()
             log(db, "SUPERADMIN_CREATED", actor=u, entity=None, target_ref=u.email)
-        else:
-            # ✅ IMPORTANTE: garante que a password do Render é a password que fica na BD
-            u.password_hash = hash_password((settings.SUPERADMIN_PASSWORD or "")[:72])
-            db.commit()
-            log(db, "SUPERADMIN_PASSWORD_RESET", actor=u, entity=None, target_ref=u.email)
 
     finally:
         db.close()
