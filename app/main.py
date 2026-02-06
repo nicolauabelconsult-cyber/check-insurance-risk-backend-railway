@@ -96,3 +96,6 @@ def on_startup():
 
     finally:
         db.close()
+@app.get("/debug/cors")
+def debug_cors():
+    return {"cors": settings.cors_list()}
