@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     SUPERADMIN_EMAIL: str
     SUPERADMIN_PASSWORD: str
 
-    CORS_ORIGINS: str = "http://localhost:5173,https://checkinsurancerisk.com"
+    CORS_ORIGINS: str = "http://localhost:5173,https://checkinsurancerisk.com,https://www.checkinsurancerisk.com"
 
     def cors_list(self) -> list[str]:
         return [x.strip() for x in self.CORS_ORIGINS.split(",") if x.strip()]
