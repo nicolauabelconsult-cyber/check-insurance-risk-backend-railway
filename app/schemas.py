@@ -111,3 +111,36 @@ class AuditOut(BaseModel):
     target_ref: Optional[str]
     meta: dict
     created_at: str
+
+from pydantic import BaseModel
+from typing import Optional, Any, List, Literal
+
+# --- SEARCH ---
+class RiskSearchIn(BaseModel):
+    entity_id: str
+    name: str
+    nationality: Optional[str] = None
+
+class CandidateOut(BaseModel):
+    id: str
+    full_name: str
+    nationality: Optional[str] = None
+    dob: Optional[str] = None
+    doc_type: Optional[str] = None
+    doc_last4: Optional[str] = None
+    sources: List[str] = []
+    match_score: int
+
+class RiskSearchOut(BaseModel):
+    disambiguation_required: bool
+    candidates: List[CandidateOut]
+
+# --- CONFIRM ---
+class RiskConfirmIn(BaseModel):
+    entity_id: str
+    candidate_id: str
+    name: str
+    nationality: str
+    id_type: Literal["BI", "PASSPORT"]
+    id_number: str
+
