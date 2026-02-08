@@ -144,3 +144,13 @@ class RiskConfirmIn(BaseModel):
     id_type: Literal["BI", "PASSPORT"]
     id_number: str
 
+from typing import List
+
+class UserOut(BaseModel):
+    id: str
+    name: str
+    email: EmailStr
+    role: str
+    status: str
+    entity: Optional[UserEntity] = None
+    permissions: list[str] = []
