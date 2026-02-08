@@ -1,6 +1,7 @@
 # app/routers/risks.py
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import ProgrammingError
 
 from ..db import get_db
 from ..deps import require_perm
@@ -14,11 +15,14 @@ router = APIRouter(prefix="/risks", tags=["risks"])
 def list_risks(db: Session = Depends(get_db), u=Depends(require_perm("risk:read"))):
     q = db.query(Risk)
 
-    # scoping: clientes só veem a sua entidade
     if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
         q = q.filter(Risk.entity_id == u.entity_id)
 
-    rows = q.order_by(Risk.created_at.desc()).all()
+    try:
+        rows = q.order_by(Risk.created_at.desc()).all()
+    except ProgrammingError:
+        # fallback: se created_at não existir ainda na BD
+        rows = q.order_by(Risk.id.desc()).all()
 
     return [
         RiskOut(
