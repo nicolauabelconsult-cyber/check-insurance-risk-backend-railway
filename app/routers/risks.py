@@ -1,7 +1,6 @@
 # app/routers/risks.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-import traceback
 
 from ..db import get_db
 from ..deps import require_perm
@@ -10,35 +9,30 @@ from ..schemas import RiskOut
 
 router = APIRouter(prefix="/risks", tags=["risks"])
 
-@router.get("", response_model=list[RiskOut])
+@router.get("/", response_model=list[RiskOut])
 def list_risks(db: Session = Depends(get_db), u=Depends(require_perm("risk:read"))):
-    try:
-        q = db.query(Risk)
+    q = db.query(Risk)
 
-        if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
-            q = q.filter(Risk.entity_id == u.entity_id)
+    if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
+        q = q.filter(Risk.entity_id == u.entity_id)
 
-        rows = q.order_by(Risk.id.desc()).all()
+    rows = q.order_by(Risk.created_at.desc()).all()
 
-        return [
-            RiskOut(
-                id=str(getattr(r, "id")),
-                entity_id=getattr(r, "entity_id", None),
+    return [
+        RiskOut(
+            id=r.id,
+            entity_id=r.entity_id,
 
-                # ✅ isto evita o crash
-                name=getattr(r, "name", None),
-                bi=getattr(r, "bi", None),
-                passport=getattr(r, "passport", None),
-                nationality=getattr(r, "nationality", None),
+            # ✅ MAPA CERTO (vem dos campos query_*)
+            name=r.query_name,
+            bi=r.query_bi,
+            passport=r.query_passport,
+            nationality=r.query_nationality,
 
-                score=getattr(r, "score", None),
-                summary=getattr(r, "summary", None),
-                matches=getattr(r, "matches", []) or [],
-                status=getattr(r, "status", "UNKNOWN"),
-            )
-            for r in rows
-        ]
-
-    except Exception as e:
-        print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+            score=r.score,
+            summary=r.summary,
+            matches=r.matches or [],
+            status=r.status.value if hasattr(r.status, "value") else str(r.status),
+        )
+        for r in rows
+    ]
