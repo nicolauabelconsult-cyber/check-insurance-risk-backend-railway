@@ -99,3 +99,20 @@ def on_startup():
 @app.get("/debug/cors")
 def debug_cors():
     return {"cors": settings.cors_list()}
+
+from .rbac import ROLE_PERMS
+
+@app.get("/auth/me", response_model=UserOut)
+def me(u=Depends(get_current_user)):
+    ent = u.entity
+    perms = sorted(list(ROLE_PERMS.get(u.role, set())))
+
+    return UserOut(
+        id=u.id,
+        name=u.name,
+        email=u.email,
+        role=u.role.value,
+        status=u.status.value,
+        entity=UserEntity(id=ent.id, name=ent.name) if ent else None,
+        permissions=perms,
+    )
