@@ -1,15 +1,10 @@
-from __future__ import annotations
-
 from pydantic import BaseModel, EmailStr
 from typing import Optional, Any, List, Literal, Dict
 
-
-# ---------------- USERS / AUTH ----------------
-
+# ---------------- AUTH ----------------
 class UserEntity(BaseModel):
     id: str
     name: str
-
 
 class UserOut(BaseModel):
     id: str
@@ -20,38 +15,24 @@ class UserOut(BaseModel):
     entity: Optional[UserEntity] = None
     permissions: List[str] = []
 
-
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
-
 
 class LoginOut(BaseModel):
     access_token: str
     refresh_token: str
     user: UserOut
 
-
-class RefreshIn(BaseModel):
-    refresh_token: str
-
-
-class TokenOut(BaseModel):
-    access_token: str
-
-
 # ---------------- ENTITIES ----------------
-
 class EntityCreate(BaseModel):
     name: str
-    type: str
-
+    type: str   # "BANK" | "INSURER" | "OTHER"
 
 class EntityUpdate(BaseModel):
     name: Optional[str] = None
     type: Optional[str] = None
-    status: Optional[str] = None
-
+    status: Optional[str] = None  # "ACTIVE" | "DISABLED"
 
 class EntityOut(BaseModel):
     id: str
@@ -59,16 +40,13 @@ class EntityOut(BaseModel):
     type: str
     status: str
 
-
-# ---------------- USERS (CRUD) ----------------
-
+# ---------------- USERS ----------------
 class UserCreate(BaseModel):
     name: str
     email: EmailStr
     password: str
     role: str
-    entity_id: str
-
+    entity_id: Optional[str] = None
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
@@ -76,26 +54,21 @@ class UserUpdate(BaseModel):
     status: Optional[str] = None
     entity_id: Optional[str] = None
 
-
 class ResetPasswordIn(BaseModel):
     new_password: str
 
-
 # ---------------- SOURCES ----------------
-
 class SourceCreate(BaseModel):
-    entity_id: Optional[str] = None
+    entity_id: str
     name: str
     category: str
     collected_from: str
-
 
 class SourceUpdate(BaseModel):
     name: Optional[str] = None
     category: Optional[str] = None
     collected_from: Optional[str] = None
     status: Optional[str] = None
-
 
 class SourceOut(BaseModel):
     id: str
@@ -105,18 +78,7 @@ class SourceOut(BaseModel):
     collected_from: str
     status: str
 
-
-# ---------------- RISKS (LIST/DETAIL/CREATE) ----------------
-
-class RiskCreate(BaseModel):
-    entity_id: Optional[str] = None
-    name: Optional[str] = None
-    bi: Optional[str] = None
-    passport: Optional[str] = None
-    nationality: Optional[str] = None
-    selected_candidate_id: Optional[str] = None
-
-
+# ---------------- RISKS (OPÇÃO A) ----------------
 class RiskOut(BaseModel):
     id: str
     entity_id: str
@@ -129,14 +91,10 @@ class RiskOut(BaseModel):
     matches: List[Any] = []
     status: str
 
-
-# ---------------- SEARCH / CONFIRM (OPÇÃO A) ----------------
-
 class RiskSearchIn(BaseModel):
     entity_id: str
     name: str
     nationality: Optional[str] = None
-
 
 class CandidateOut(BaseModel):
     id: str
@@ -148,11 +106,9 @@ class CandidateOut(BaseModel):
     sources: List[str] = []
     match_score: int
 
-
 class RiskSearchOut(BaseModel):
     disambiguation_required: bool
     candidates: List[CandidateOut]
-
 
 class RiskConfirmIn(BaseModel):
     entity_id: str
@@ -162,9 +118,7 @@ class RiskConfirmIn(BaseModel):
     id_type: Literal["BI", "PASSPORT"]
     id_number: str
 
-
 # ---------------- AUDIT ----------------
-
 class AuditOut(BaseModel):
     id: str
     action: str
