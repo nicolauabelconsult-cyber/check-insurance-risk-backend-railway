@@ -18,27 +18,27 @@ def list_risks(db: Session = Depends(get_db), u=Depends(require_perm("risk:read"
         if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
             q = q.filter(Risk.entity_id == u.entity_id)
 
-        # ⚠️ usa um campo que exista com certeza (para evitar 500 por created_at)
         rows = q.order_by(Risk.id.desc()).all()
 
         return [
             RiskOut(
-                id=r.id,
-                entity_id=r.entity_id,
-                name=r.name,
-                bi=r.bi,
-                passport=r.passport,
-                nationality=r.nationality,
-                score=r.score,
-                summary=r.summary,
-                matches=r.matches or [],
-                status=r.status,
+                id=str(getattr(r, "id")),
+                entity_id=getattr(r, "entity_id", None),
+
+                # ✅ isto evita o crash
+                name=getattr(r, "name", None),
+                bi=getattr(r, "bi", None),
+                passport=getattr(r, "passport", None),
+                nationality=getattr(r, "nationality", None),
+
+                score=getattr(r, "score", None),
+                summary=getattr(r, "summary", None),
+                matches=getattr(r, "matches", []) or [],
+                status=getattr(r, "status", "UNKNOWN"),
             )
             for r in rows
         ]
 
     except Exception as e:
-        # imprime stacktrace nos logs do Render também
         print(traceback.format_exc())
-        # e devolve erro claro para o browser (vai vir com CORS)
         raise HTTPException(status_code=500, detail=str(e))
