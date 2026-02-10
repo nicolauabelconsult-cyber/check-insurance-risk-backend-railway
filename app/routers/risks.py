@@ -168,3 +168,16 @@ def confirm_risk(data: RiskConfirmIn, db: Session = Depends(get_db), u=Depends(r
     db.commit()
 
     return _risk_out(r)
+
+# app/routers/risks.py (adiciona isto no topo)
+def _resolve_entity_id(u, requested: str | None):
+    # SUPER_ADMIN/ADMIN podem escolher
+    if u.role in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
+        if not requested:
+            raise HTTPException(status_code=400, detail="entity_id is required for admin users")
+        return requested
+
+    # clientes: entity_id vem do utilizador autenticado
+    if not u.entity_id:
+        raise HTTPException(status_code=400, detail="User has no entity_id")
+    return u.entity_id
