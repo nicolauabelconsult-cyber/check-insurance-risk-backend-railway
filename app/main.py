@@ -1,6 +1,6 @@
 # app/main.py
 import uuid
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError
@@ -9,6 +9,9 @@ from .settings import settings
 from .db import SessionLocal
 from .models import User, UserRole, UserStatus
 from .security import hash_password
+from .deps import get_current_user
+from .schemas import UserOut, UserEntity
+from .rbac import role_perms
 from .audit import log
 
 from .routers import auth, entities, users, sources, risks, audit
@@ -23,7 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routes
 app.include_router(auth.router)
 app.include_router(entities.router)
 app.include_router(users.router)
@@ -31,13 +33,22 @@ app.include_router(sources.router)
 app.include_router(risks.router)
 app.include_router(audit.router)
 
-@app.get("/")
-def root():
-    return {"service": settings.APP_NAME, "status": "ok"}
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/auth/me", response_model=UserOut)
+def me(u=Depends(get_current_user)):
+    ent = u.entity
+    return UserOut(
+        id=u.id,
+        name=u.name,
+        email=u.email,
+        role=u.role.value,
+        status=u.status.value,
+        entity=UserEntity(id=ent.id, name=ent.name) if ent else None,
+        permissions=role_perms(u.role),
+    )
 
 @app.on_event("startup")
 def on_startup():
