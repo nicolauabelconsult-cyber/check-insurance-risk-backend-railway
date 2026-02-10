@@ -1,3 +1,4 @@
+# app/rbac.py
 from .models import UserRole
 
 PERMS_BY_ROLE = {
@@ -27,6 +28,9 @@ PERMS_BY_ROLE = {
         "audit:read",
     },
 }
+
+# ✅ compatibilidade com imports antigos
+ROLE_PERMS = PERMS_BY_ROLE
 
 def has_perm(role: UserRole, perm: str) -> bool:
     return perm in PERMS_BY_ROLE.get(role, set())
