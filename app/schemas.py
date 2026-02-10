@@ -127,3 +127,17 @@ class AuditOut(BaseModel):
     target_ref: Optional[str] = None
     meta: Dict[str, Any] = {}
     created_at: str
+
+# app/schemas.py (apenas estes 2)
+class RiskSearchIn(BaseModel):
+    entity_id: Optional[str] = None
+    name: str
+    nationality: Optional[str] = None
+
+class RiskConfirmIn(BaseModel):
+    entity_id: Optional[str] = None
+    candidate_id: str
+    name: str
+    nationality: str
+    id_type: Literal["BI", "PASSPORT"]
+    id_number: str
