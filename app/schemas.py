@@ -141,3 +141,18 @@ class RiskConfirmIn(BaseModel):
     nationality: str
     id_type: Literal["BI", "PASSPORT"]
     id_number: str
+
+# --- SEARCH ---
+class RiskSearchIn(BaseModel):
+    entity_id: Optional[str] = None
+    name: str
+    nationality: Optional[str] = None
+
+# --- CONFIRM ---
+class RiskConfirmIn(BaseModel):
+    entity_id: Optional[str] = None
+    candidate_id: str
+    name: str
+    nationality: str
+    id_type: Literal["BI", "PASSPORT"]
+    id_number: str
