@@ -1,7 +1,6 @@
 # app/rbac.py
 from .models import UserRole
 
-# Mapa de permissões por role
 PERMS_BY_ROLE = {
     UserRole.SUPER_ADMIN: {
         "entities:read", "entities:create", "entities:update",
@@ -30,13 +29,11 @@ PERMS_BY_ROLE = {
     },
 }
 
-# ✅ Compatibilidade: se algum sítio ainda tentar importar ROLE_PERMS
+# ✅ compatibilidade: se algum ficheiro tentar importar ROLE_PERMS
 ROLE_PERMS = PERMS_BY_ROLE
-
 
 def has_perm(role: UserRole, perm: str) -> bool:
     return perm in PERMS_BY_ROLE.get(role, set())
-
 
 def role_perms(role: UserRole) -> list[str]:
     return sorted(list(PERMS_BY_ROLE.get(role, set())))
