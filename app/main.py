@@ -13,10 +13,8 @@ from .audit import log
 
 from .routers import auth, entities, users, sources, risks, audit
 
-
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 
-# ✅ CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_list(),
@@ -25,7 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Routers
+# Routes
 app.include_router(auth.router)
 app.include_router(entities.router)
 app.include_router(users.router)
@@ -33,38 +31,27 @@ app.include_router(sources.router)
 app.include_router(risks.router)
 app.include_router(audit.router)
 
-
 @app.get("/")
 def root():
     return {"service": settings.APP_NAME, "status": "ok"}
-
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-
 @app.get("/debug/cors")
 def debug_cors():
     return {"cors": settings.cors_list()}
 
-
 @app.on_event("startup")
 def on_startup():
-    """
-    Em produção (Render):
-    - As tabelas devem ser criadas via Alembic:
-      alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    """
     db: Session = SessionLocal()
     try:
-        # Se migrations ainda não correram e a tabela users não existe, não quebra o startup
         try:
             u = db.query(User).filter(User.email == settings.SUPERADMIN_EMAIL).first()
         except ProgrammingError:
             return
 
-        # cria o superadmin uma única vez
         if not u:
             u = User(
                 id=str(uuid.uuid4()),
@@ -78,6 +65,5 @@ def on_startup():
             db.add(u)
             db.commit()
             log(db, "SUPERADMIN_CREATED", actor=u, entity=None, target_ref=u.email)
-
     finally:
         db.close()
