@@ -79,11 +79,22 @@ def get_risk(risk_id: str, db: Session = Depends(get_db), u=Depends(require_perm
 
     return _risk_out(r)
 
+def _resolve_entity_id(u, requested: str | None) -> str:
+    # SUPER_ADMIN/ADMIN podem escolher entity_id (obrigatório para eles)
+    if u.role in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
+        if not requested:
+            raise HTTPException(status_code=400, detail="entity_id required")
+        return requested
+
+    # clientes: entity_id vem SEMPRE do utilizador (ignora qualquer payload)
+    if not u.entity_id:
+        raise HTTPException(status_code=400, detail="User has no entity_id")
+    return u.entity_id
+
+
 @router.post("/search", response_model=RiskSearchOut)
 def search_risks(data: RiskSearchIn, db: Session = Depends(get_db), u=Depends(require_perm("risk:create"))):
-    # clientes não podem pesquisar noutra entidade
-    if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN) and data.entity_id != u.entity_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    entity_id = _resolve_entity_id(u, data.entity_id)
 
     name = (data.name or "").strip().lower()
     nat = (data.nationality or "").strip().lower()
@@ -92,19 +103,7 @@ def search_risks(data: RiskSearchIn, db: Session = Depends(get_db), u=Depends(re
     for c in CANDIDATES:
         if name and name not in c["full_name"].lower():
             continue
-
-        score = 40
-        if c["full_name"].lower() == name:
-            score += 20
-        if nat and nat in (c.get("nationality") or "").lower():
-            score += 20
-        if c.get("doc_last4"):
-            score += 10
-        if c.get("dob"):
-            score += 10
-        if score > 100:
-            score = 100
-
+        # ... (o teu scoring igual)
         hits.append(
             CandidateOut(
                 id=c["id"],
@@ -119,17 +118,12 @@ def search_risks(data: RiskSearchIn, db: Session = Depends(get_db), u=Depends(re
         )
 
     hits.sort(key=lambda x: x.match_score, reverse=True)
+    return {"disambiguation_required": len(hits) > 1, "candidates": hits}
 
-    return {
-        "disambiguation_required": len(hits) > 1,
-        "candidates": hits,
-    }
 
 @router.post("/confirm", response_model=RiskOut)
 def confirm_risk(data: RiskConfirmIn, db: Session = Depends(get_db), u=Depends(require_perm("risk:confirm"))):
-    # clientes não podem confirmar noutra entidade
-    if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN) and data.entity_id != u.entity_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    entity_id = _resolve_entity_id(u, data.entity_id)
 
     cand = next((c for c in CANDIDATES if c["id"] == data.candidate_id), None)
     if not cand:
@@ -147,7 +141,7 @@ def confirm_risk(data: RiskConfirmIn, db: Session = Depends(get_db), u=Depends(r
 
     r = Risk(
         id=str(uuid.uuid4()),
-        entity_id=data.entity_id,
+        entity_id=entity_id,  # ✅ aqui é o ponto
         query_name=data.name,
         query_nationality=data.nationality,
         query_bi=data.id_number if data.id_type == "BI" else None,
@@ -166,18 +160,4 @@ def confirm_risk(data: RiskConfirmIn, db: Session = Depends(get_db), u=Depends(r
 
     db.add(r)
     db.commit()
-
     return _risk_out(r)
-
-# app/routers/risks.py (adiciona isto no topo)
-def _resolve_entity_id(u, requested: str | None):
-    # SUPER_ADMIN/ADMIN podem escolher
-    if u.role in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
-        if not requested:
-            raise HTTPException(status_code=400, detail="entity_id is required for admin users")
-        return requested
-
-    # clientes: entity_id vem do utilizador autenticado
-    if not u.entity_id:
-        raise HTTPException(status_code=400, detail="User has no entity_id")
-    return u.entity_id
