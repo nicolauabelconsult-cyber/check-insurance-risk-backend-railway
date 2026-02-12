@@ -22,3 +22,6 @@ class Settings(BaseSettings):
         return [x.strip() for x in self.CORS_ORIGINS.split(",") if x.strip()]
 
 settings = Settings()
+
+PDF_SECRET_KEY: str
+BASE_URL: str
