@@ -2,12 +2,12 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..db import get_db
-from ..deps import require_perm
-from ..models import User, Entity, UserRole, UserStatus
-from ..schemas import UserOut, UserCreate, UserUpdate, ResetPasswordIn, UserEntity
-from ..security import hash_password
-from ..audit import log
+from app.db import get_db
+from app.deps import require_perm
+from app.models import User, Entity, UserRole, UserStatus
+from app.schemas import UserOut, UserCreate, UserUpdate, ResetPasswordIn, UserEntity
+from app.security import hash_password
+from app.audit import log
 
 router = APIRouter(prefix="/users", tags=["users"])
 
