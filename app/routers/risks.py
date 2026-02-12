@@ -1,240 +1,167 @@
-import io
-import uuid
-
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from io import BytesIO
+from datetime import datetime
+import hashlib
+import qrcode
 
-from ..audit import log
-from ..db import get_db
-from ..deps import get_current_user, require_perm
-from ..models import Risk, RiskStatus, UserRole
-from ..pdfs import build_risk_pdf
-from ..schemas import (
-    RiskOut,
-    RiskSearchIn,
-    RiskSearchOut,
-    CandidateOut,
-    RiskConfirmIn,
-)
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Image
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
 
-router = APIRouter(prefix="/risks", tags=["risks"])
+from core.deps import get_db, get_current_user
+from core.permissions import require_perm
+from models import Risk
+from audit.service import log_action
+from core.config import settings  # deve conter PDF_SECRET_KEY e BASE_URL
 
-
-# ---- dataset mock (depois ligas às fontes reais) ----
-CANDIDATES = [
-    {
-        "id": "cand-1",
-        "full_name": "João Manuel",
-        "nationality": "Angolana",
-        "dob": "1980-02-11",
-        "doc_type": "BI",
-        "doc_full": "BI123456789AO",
-        "doc_last4": "9AO",
-        "sources": ["PEP Angola 2026", "Lista Interna Banco X"],
-    },
-    {
-        "id": "cand-2",
-        "full_name": "João Manuel",
-        "nationality": "Portuguesa",
-        "dob": "1976-10-03",
-        "doc_type": "PASSPORT",
-        "doc_full": "P1234567",
-        "doc_last4": "4567",
-        "sources": ["News Archive", "Sanctions Watchlist"],
-    },
-    {
-        "id": "cand-3",
-        "full_name": "João Manuel António",
-        "nationality": "Angolana",
-        "dob": "1988-05-19",
-        "doc_type": "BI",
-        "doc_full": "BI987654321AO",
-        "doc_last4": "1AO",
-        "sources": ["PEP Angola 2026"],
-    },
-]
+router = APIRouter()
 
 
-def _risk_out(r: Risk) -> RiskOut:
-    return RiskOut(
-        id=r.id,
-        entity_id=r.entity_id,
-        name=r.query_name,
-        bi=r.query_bi,
-        passport=r.query_passport,
-        nationality=r.query_nationality,
-        score=r.score,
-        summary=r.summary,
-        matches=r.matches or [],
-        status=r.status.value if hasattr(r.status, "value") else str(r.status),
-    )
-
-
-def _scoped_entity_id(u, requested: str | None) -> str:
-    """
-    Opção A: o cliente NÃO envia entity_id.
-    - CLIENT_* -> usa sempre u.entity_id
-    - SUPER_ADMIN / ADMIN -> deve enviar entity_id (via dropdown no frontend)
-    """
-    if u.role in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
-        if not requested:
-            raise HTTPException(status_code=400, detail="entity_id is required for admin")
-        return requested
-
-    if not u.entity_id:
-        raise HTTPException(status_code=400, detail="User has no entity_id")
-    return u.entity_id
-
-
-@router.get("", response_model=list[RiskOut])
-def list_risks(db: Session = Depends(get_db), u=Depends(require_perm("risk:read"))):
-    q = db.query(Risk)
-    if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
-        q = q.filter(Risk.entity_id == u.entity_id)
-    rows = q.order_by(Risk.created_at.desc()).all()
-    return [_risk_out(r) for r in rows]
-
-
-@router.get("/{risk_id}", response_model=RiskOut)
-def get_risk(risk_id: str, db: Session = Depends(get_db), u=Depends(require_perm("risk:read"))):
-    r = db.get(Risk, risk_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Risk not found")
-    if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN) and r.entity_id != u.entity_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return _risk_out(r)
-
-
-@router.get("/{risk_id}/pdf")
-def download_pdf(
+@router.get("/risks/{risk_id}/pdf")
+def generate_risk_pdf(
     risk_id: str,
     db: Session = Depends(get_db),
-    u=Depends(require_perm("risk:pdf:download")),
+    current_user=Depends(get_current_user),
 ):
-    r = db.get(Risk, risk_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Risk not found")
-    if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN) and r.entity_id != u.entity_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
-    pdf_bytes = build_risk_pdf(_risk_out(r).model_dump())
-    log(db, "RISK_PDF_DOWNLOADED", actor=u, entity=None, target_ref=r.id, meta={"risk_id": r.id})
+    require_perm(current_user, "risk:read")
+
+    risk = (
+        db.query(Risk)
+        .filter(
+            Risk.id == risk_id,
+            Risk.entity_id == current_user.entity_id,
+        )
+        .first()
+    )
+
+    if not risk:
+        raise HTTPException(status_code=404, detail="Risk not found")
+
+    buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=40,
+        leftMargin=40,
+        topMargin=60,
+        bottomMargin=60,
+    )
+
+    elements = []
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "TitleStyle",
+        parent=styles["Title"],
+        textColor=colors.HexColor("#0A1F44"),
+    )
+
+    normal_style = styles["Normal"]
+
+    # Header
+    elements.append(Paragraph("CHECK INSURANCE RISK", title_style))
+    elements.append(Spacer(1, 6))
+    elements.append(Paragraph("Risk Assessment Report", styles["Heading2"]))
+    elements.append(Spacer(1, 20))
+
+    elements.append(Paragraph(f"<b>Risk ID:</b> {risk.id}", normal_style))
+    elements.append(Paragraph(f"<b>Entity:</b> {risk.entity_id}", normal_style))
+    elements.append(Paragraph(f"<b>Analyst:</b> {current_user.name}", normal_style))
+    elements.append(
+        Paragraph(
+            f"<b>Date:</b> {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}",
+            normal_style,
+        )
+    )
+    elements.append(Spacer(1, 20))
+
+    # Score Table
+    data = [
+        ["Metric", "Value"],
+        ["Score", str(risk.score)],
+        ["Risk Level", risk.level],
+        ["Status", risk.status],
+    ]
+
+    table = Table(data, colWidths=[70 * mm, 50 * mm])
+    table.setStyle(
+        [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0A1F44")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ]
+    )
+
+    elements.append(table)
+    elements.append(Spacer(1, 20))
+
+    # Integrity Hash
+    raw_data = f"{risk.id}{risk.score}{risk.level}{risk.created_at}"
+    integrity_hash = hashlib.sha256(raw_data.encode()).hexdigest()
+
+    elements.append(Paragraph("<b>Digital Integrity Hash:</b>", normal_style))
+    elements.append(Paragraph(integrity_hash, normal_style))
+    elements.append(Spacer(1, 20))
+
+    # QR Code
+    verify_url = f"{settings.BASE_URL}/verify/{risk.id}/{integrity_hash}"
+    qr = qrcode.make(verify_url)
+    qr_buffer = BytesIO()
+    qr.save(qr_buffer)
+    qr_buffer.seek(0)
+
+    elements.append(Paragraph("<b>Verification QR Code:</b>", normal_style))
+    elements.append(Spacer(1, 6))
+    elements.append(Image(qr_buffer, width=40 * mm, height=40 * mm))
+    elements.append(Spacer(1, 20))
+
+    # Server Digital Signature
+    server_signature = hashlib.sha256(
+        f"{integrity_hash}{settings.PDF_SECRET_KEY}".encode()
+    ).hexdigest()
+
+    elements.append(Paragraph("<b>System Digital Signature:</b>", normal_style))
+    elements.append(Paragraph(server_signature, normal_style))
+    elements.append(Spacer(1, 40))
+
+    # Footer
+    footer_style = ParagraphStyle(
+        "Footer",
+        parent=styles["Normal"],
+        fontSize=8,
+        textColor=colors.grey,
+    )
+
+    elements.append(
+        Paragraph(
+            "Confidential document. Unauthorized distribution is prohibited.",
+            footer_style,
+        )
+    )
+
+    doc.build(elements)
+    buffer.seek(0)
+
+    # Audit log
+    log_action(
+        db=db,
+        actor_id=current_user.id,
+        entity_id=current_user.entity_id,
+        action="RISK_PDF_DOWNLOAD",
+        target_id=risk.id,
+        meta={"score": risk.score},
+    )
 
     return StreamingResponse(
-        io.BytesIO(pdf_bytes),
+        buffer,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=RISK-{r.id}.pdf"},
+        headers={
+            "Content-Disposition": f"attachment; filename=risk_{risk.id}.pdf"
+        },
     )
-
-
-@router.post("/search", response_model=RiskSearchOut)
-def search_risks(
-    data: RiskSearchIn,
-    db: Session = Depends(get_db),
-    u=Depends(require_perm("risk:create")),
-):
-    entity_id = _scoped_entity_id(u, data.entity_id)
-
-    name = (data.name or "").strip().lower()
-    nat = (data.nationality or "").strip().lower()
-
-    hits: list[CandidateOut] = []
-    for c in CANDIDATES:
-        if name and name not in c["full_name"].lower():
-            continue
-
-        score = 40
-        if c["full_name"].lower() == name:
-            score += 20
-        if nat and nat in (c.get("nationality") or "").lower():
-            score += 20
-        if c.get("doc_last4"):
-            score += 10
-        if c.get("dob"):
-            score += 10
-        score = min(score, 100)
-
-        hits.append(
-            CandidateOut(
-                id=c["id"],
-                full_name=c["full_name"],
-                nationality=c.get("nationality"),
-                dob=c.get("dob"),
-                doc_type=c.get("doc_type"),
-                doc_last4=c.get("doc_last4"),
-                sources=c.get("sources", []),
-                match_score=score,
-            )
-        )
-
-    hits.sort(key=lambda x: x.match_score, reverse=True)
-
-    log(
-        db,
-        "RISK_SEARCH",
-        actor=u,
-        entity=None,
-        target_ref=name,
-        meta={"entity_id": entity_id, "nationality": data.nationality},
-    )
-
-    return RiskSearchOut(disambiguation_required=len(hits) > 1, candidates=hits)
-
-
-@router.post("/confirm", response_model=RiskOut)
-def confirm_risk(
-    data: RiskConfirmIn,
-    db: Session = Depends(get_db),
-    u=Depends(require_perm("risk:confirm")),
-):
-    entity_id = _scoped_entity_id(u, data.entity_id)
-
-    cand = next((c for c in CANDIDATES if c["id"] == data.candidate_id), None)
-    if not cand:
-        raise HTTPException(status_code=400, detail="Candidate not found")
-
-    # valida doc (mock)
-    if data.id_type == "BI" and not data.id_number.upper().startswith("BI"):
-        raise HTTPException(status_code=400, detail="Invalid BI")
-    if data.id_type == "PASSPORT" and len(data.id_number.strip()) < 5:
-        raise HTTPException(status_code=400, detail="Invalid passport")
-
-    is_pep = any("pep" in s.lower() for s in cand.get("sources", []))
-    score = "HIGH" if is_pep else "LOW"
-    summary = "Resultado gerado (mock). Pronto para ligar a fontes reais."
-
-    r = Risk(
-        id=str(uuid.uuid4()),
-        entity_id=entity_id,
-        query_name=data.name,
-        query_nationality=data.nationality,
-        query_bi=data.id_number if data.id_type == "BI" else None,
-        query_passport=data.id_number if data.id_type == "PASSPORT" else None,
-        score=score,
-        summary=summary,
-        matches=[
-            {
-                "candidate_id": cand["id"],
-                "full_name": cand["full_name"],
-                "sources": cand.get("sources", []),
-                "is_pep": is_pep,
-            }
-        ],
-        status=RiskStatus.DONE,
-        created_by=u.id,
-    )
-
-    db.add(r)
-    db.commit()
-
-    log(
-        db,
-        "RISK_CONFIRMED",
-        actor=u,
-        entity=None,
-        target_ref=r.id,
-        meta={"entity_id": entity_id, "candidate_id": data.candidate_id},
-    )
-
-    return _risk_out(r)
