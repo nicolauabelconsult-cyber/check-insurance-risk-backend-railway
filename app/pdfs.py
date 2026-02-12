@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 import hashlib
@@ -12,6 +11,8 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.lib.utils import simpleSplit
+from reportlab.pdfgen import canvas
 from reportlab.platypus import (
     SimpleDocTemplate,
     Paragraph,
@@ -63,7 +64,7 @@ def make_report_number(risk: Risk) -> str:
     """
     Banco-ready sem migração:
     número determinístico baseado em data + parte do UUID.
-    (Se quiseres sequência real por entidade, eu passo migração depois.)
+    (Se quiseres sequência real por entidade, fazemos migration depois.)
     """
     dt = risk.created_at or datetime.utcnow()
     ymd = dt.strftime("%Y%m%d")
@@ -96,6 +97,28 @@ def _maybe_logo() -> Image | None:
     if not os.path.exists(path):
         return None
     return Image(path, width=22 * mm, height=22 * mm)
+
+
+def _footer(canvas: canvas.Canvas, doc):
+    """
+    Rodapé institucional com paginação.
+    """
+    canvas.saveState()
+    canvas.setFont("Helvetica", 8)
+    canvas.setFillColor(colors.grey)
+
+    canvas.drawString(
+        18 * mm,
+        12 * mm,
+        "Confidential document. Unauthorized distribution is prohibited."
+    )
+    canvas.drawRightString(
+        A4[0] - 18 * mm,
+        12 * mm,
+        f"Page {doc.page}"
+    )
+
+    canvas.restoreState()
 
 
 # ---------------------------------
@@ -161,7 +184,9 @@ def build_risk_pdf_institutional(
     header_left = []
     if logo:
         header_left.append(logo)
-    header_left.append(Paragraph("<b>CHECK INSURANCE RISK</b><br/>KYC • AML • PEP • Due Diligence", small_grey))
+    header_left.append(
+        Paragraph("<b>CHECK INSURANCE RISK</b><br/>KYC • AML • PEP • Due Diligence", small_grey)
+    )
 
     header_table = Table(
         [[header_left, Paragraph("<b>Risk Assessment Report</b>", H1)]],
@@ -184,13 +209,17 @@ def build_risk_pdf_institutional(
     score_int = int(risk.score) if str(risk.score).isdigit() else 0
     risk_level = score_to_level(score_int)
 
+    app_version = getattr(settings, "APP_VERSION", "v1.0")
+    app_env = getattr(settings, "APP_ENV", "Production")
+    system_version = f"{app_version} ({app_env})"
+
     meta = [
         ["Report Number", report_no],
         ["Risk ID", str(risk.id)],
         ["Entity ID", str(risk.entity_id)],
         ["Analyst", analyst_name],
         ["Generated at (UTC)", generated_at.strftime("%Y-%m-%d %H:%M:%S")],
-        ["System Version", getattr(settings, "APP_VERSION", "v1.0")],
+        ["System Version", system_version],
     ]
     meta_table = Table(meta, colWidths=[45 * mm, 135 * mm])
     meta_table.setStyle(
@@ -244,11 +273,17 @@ def build_risk_pdf_institutional(
     else:
         rows = [["Source", "Match", "Confidence", "Notes"]]
         for m in matches:
+            conf = ""
+            if m.get("confidence") is not None:
+                try:
+                    conf = f"{float(m.get('confidence', 0)) * 100:.0f}%"
+                except Exception:
+                    conf = str(m.get("confidence"))
             rows.append(
                 [
                     str(m.get("source", "")),
                     "YES" if m.get("match") else "NO",
-                    f'{float(m.get("confidence", 0)) * 100:.0f}%' if m.get("confidence") is not None else "",
+                    conf,
                     str(m.get("note", "")),
                 ]
             )
@@ -287,8 +322,14 @@ def build_risk_pdf_institutional(
     elements.append(Paragraph("Document Verification", H2))
 
     qr = _qr_image(verify_url)
+
+    # Quebra controlada do URL (para não ficar feio no PDF)
+    url_lines = simpleSplit(verify_url, normal.fontName, normal.fontSize, 120 * mm)
+    url_lines = url_lines[:3]  # no máximo 3 linhas
+    pretty_url = "<br/>".join(url_lines)
+
     ver_table = Table(
-        [[qr, Paragraph(f"<b>Verify URL:</b><br/>{verify_url}", normal)]],
+        [[qr, Paragraph(f"<b>Verify URL:</b><br/>{pretty_url}", normal)]],
         colWidths=[40 * mm, 140 * mm],
     )
     ver_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
@@ -298,15 +339,8 @@ def build_risk_pdf_institutional(
     elements.append(Paragraph(f"<b>Integrity Hash:</b> {integrity_hash}", small_grey))
     elements.append(Paragraph(f"<b>Server Signature:</b> {server_signature}", small_grey))
 
-    # ---------- Footer ----------
-    elements.append(Spacer(1, 10))
-    elements.append(
-        Paragraph(
-            "Confidential document. Unauthorized distribution is prohibited.",
-            small_grey,
-        )
-    )
+    # Build com rodapé e paginação
+    doc.build(elements, onFirstPage=_footer, onLaterPages=_footer)
 
-    doc.build(elements)
     buffer.seek(0)
     return buffer.read()
