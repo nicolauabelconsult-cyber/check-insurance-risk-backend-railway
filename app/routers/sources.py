@@ -2,11 +2,11 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..db import get_db
-from ..deps import require_perm
-from ..models import Source, SourceStatus
-from ..schemas import SourceCreate, SourceOut, SourceUpdate
-from ..audit import log
+from app.db import get_db
+from app.deps import require_perm
+from app.models import Source, SourceStatus
+from app.schemas import SourceCreate, SourceOut, SourceUpdate
+from app.audit import log
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
