@@ -36,11 +36,14 @@ def _qr_image(verify_url: str) -> Image:
     qr = qrcode.QRCode(box_size=8, border=2)
     qr.add_data(verify_url)
     qr.make(fit=True)
+
     img = qr.make_image(fill_color="black", back_color="white")
     bio = BytesIO()
     img.save(bio, format="PNG")
     bio.seek(0)
-    return Image(ImageReader(bio), width=40 * mm, height=40 * mm)
+
+    # ✅ Platypus Image aceita file-like (BytesIO), não ImageReader
+    return Image(bio, width=40 * mm, height=40 * mm)
 
 
 def build_risk_pdf_institutional(
