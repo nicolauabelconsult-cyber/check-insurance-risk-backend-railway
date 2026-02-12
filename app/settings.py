@@ -27,3 +27,6 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+APP_VERSION: str = "v1.0"
+APP_ENV: str = "Production"
+PDF_LOGO_PATH: str | None = None
