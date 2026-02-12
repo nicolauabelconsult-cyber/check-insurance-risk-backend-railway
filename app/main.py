@@ -1,4 +1,3 @@
-# app/main.py
 import uuid
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
