@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError
 
-from .settings import settings
+from app.settings import settings
 from .db import SessionLocal
 from .models import User, UserRole, UserStatus
 from .security import hash_password
