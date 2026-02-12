@@ -14,8 +14,8 @@ from reportlab.lib.units import mm
 
 from core.deps import get_db, get_current_user
 from core.permissions import require_perm
-from models import Risk
-from audit.service import log_action
+from app.models import Risk
+from app.audit.service import log_action
 from core.config import settings  # deve conter PDF_SECRET_KEY e BASE_URL
 
 router = APIRouter()
