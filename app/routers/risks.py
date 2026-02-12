@@ -193,27 +193,46 @@ def confirm_risk(
 
     return _risk_to_out(r)
 
-
 @router.get("/{risk_id}/pdf")
 def risk_pdf(
     risk_id: str,
     db: Session = Depends(get_db),
     u: User = Depends(require_perm("risk:pdf:download")),
 ):
-    r = _get_scoped_risk(db, risk_id, u)
+    r = db.get(Risk, risk_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Risk not found")
+    if u.entity_id and r.entity_id != u.entity_id:
+        raise HTTPException(status_code=404, detail="Risk not found")
 
     integrity_hash = make_integrity_hash(r)
     verify_url = f"{settings.BASE_URL}/verify/{r.id}/{integrity_hash}"
     server_signature = make_server_signature(integrity_hash)
 
-    pdf_bytes = build_risk_pdf_institutional(
-        risk=r,
-        analyst_name=u.name,
-        generated_at=datetime.utcnow(),
-        integrity_hash=integrity_hash,
-        server_signature=server_signature,
-        verify_url=verify_url,
-    )
+    try:
+        pdf_bytes = build_risk_pdf_institutional(
+            risk=r,
+            analyst_name=u.name,
+            generated_at=datetime.utcnow(),
+            integrity_hash=integrity_hash,
+            server_signature=server_signature,
+            verify_url=verify_url,
+        )
+    except Exception as e:
+        # guarda o erro na auditoria para não perdermos o motivo
+        log(
+            db,
+            "RISK_PDF_ERROR",
+            actor=u,
+            entity=None,
+            target_ref=r.id,
+            meta={"entity_id": r.entity_id, "error": repr(e)},
+        )
+        # devolve o erro para o browser/Postman (assim vemos a causa)
+        raise HTTPException(
+            status_code=500,
+            detail=f"PDF generation failed: {e.__class__.__name__}: {e}",
+        )
 
     log(
         db,
