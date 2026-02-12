@@ -6,9 +6,9 @@ from sqlalchemy.exc import ProgrammingError
 
 from app.settings import settings
 from app.db import SessionLocal
-from .models import User, UserRole, UserStatus
-from .security import hash_password
-from .audit import log
+from app.models import User, UserRole, UserStatus
+from app.security import hash_password
+from app.audit import log
 
 from .routers import auth, entities, users, sources, risks, audit
 
