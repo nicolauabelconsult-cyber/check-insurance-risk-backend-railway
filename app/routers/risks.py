@@ -1,7 +1,6 @@
 import uuid
 from datetime import datetime
 from io import BytesIO
-import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -19,20 +18,26 @@ from app.schemas import (
 )
 from app.audit import log
 from app.settings import settings
-from app.pdfs import build_risk_pdf_institutional, make_integrity_hash, make_server_signature
-
+from app.pdfs import (
+    build_risk_pdf_institutional,
+    make_integrity_hash,
+    make_server_signature,
+)
 
 router = APIRouter(prefix="/risks", tags=["risks"])
 
 
 def _resolve_entity_id(u: User, requested: str | None) -> str:
+    """
+    Admin/SuperAdmin: must pass entity_id explicitly.
+    Client: always uses its own entity_id (ignores requested).
+    """
     if u.role in {UserRole.SUPER_ADMIN, UserRole.ADMIN}:
         if not requested:
             raise HTTPException(status_code=400, detail="entity_id required for admins")
         return requested
     if not u.entity_id:
         raise HTTPException(status_code=400, detail="User entity_id missing")
-    # clients ignore requested entity_id
     return u.entity_id
 
 
@@ -47,26 +52,69 @@ def _risk_to_out(r: Risk) -> RiskOut:
         score=r.score,
         summary=r.summary,
         matches=r.matches or [],
-        status=r.status.value,
+        status=r.status.value if hasattr(r.status, "value") else str(r.status),
     )
 
 
+def _get_scoped_risk(db: Session, risk_id: str, u: User) -> Risk:
+    """
+    Fetch risk and enforce tenant isolation.
+    Return 404 always if not found OR cross-tenant access.
+    """
+    r = db.get(Risk, risk_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Risk not found")
+    if u.entity_id and r.entity_id != u.entity_id:
+        raise HTTPException(status_code=404, detail="Risk not found")
+    return r
+
+
 @router.get("", response_model=list[RiskOut])
-def list_risks(db: Session = Depends(get_db), u: User = Depends(require_perm("risk:read"))):
+def list_risks(
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("risk:read")),
+):
     q = db.query(Risk)
+
+    # Tenant scope (client only sees own entity)
     if u.entity_id:
         q = q.filter(Risk.entity_id == u.entity_id)
+
     rows = q.order_by(Risk.created_at.desc()).limit(200).all()
     return [_risk_to_out(r) for r in rows]
 
 
+@router.get("/{risk_id}", response_model=RiskOut)
+def get_risk(
+    risk_id: str,
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("risk:read")),
+):
+    r = _get_scoped_risk(db, risk_id, u)
+
+    log(
+        db,
+        "RISK_VIEW",
+        actor=u,
+        entity=None,
+        target_ref=r.id,
+        meta={"entity_id": r.entity_id},
+    )
+
+    return _risk_to_out(r)
+
+
 @router.post("/search", response_model=RiskSearchOut)
-def search_risk(body: RiskSearchIn, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:create"))):
+def search_risk(
+    body: RiskSearchIn,
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("risk:create")),
+):
     entity_id = _resolve_entity_id(u, body.entity_id)
 
     # Mock engine: generates candidates based on name
     base = body.name.strip()
-    candidates = []
+    candidates: list[CandidateOut] = []
     for i in range(1, 4):
         cid = str(uuid.uuid4())
         candidates.append(
@@ -82,16 +130,27 @@ def search_risk(body: RiskSearchIn, db: Session = Depends(get_db), u: User = Dep
             )
         )
 
-    log(db, "RISK_SEARCH", actor=u, entity=None, target_ref=base, meta={"entity_id": entity_id})
+    log(
+        db,
+        "RISK_SEARCH",
+        actor=u,
+        entity=None,
+        target_ref=base,
+        meta={"entity_id": entity_id},
+    )
 
     return RiskSearchOut(disambiguation_required=True, candidates=candidates)
 
 
 @router.post("/confirm", response_model=RiskOut)
-def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:confirm"))):
+def confirm_risk(
+    body: RiskConfirmIn,
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("risk:confirm")),
+):
     entity_id = _resolve_entity_id(u, body.entity_id)
 
-    # Mock scoring
+    # Mock scoring (substituir pelo motor real)
     score_int = 78
     score = str(score_int)
     summary = "Mock risk assessment completed. Replace with real engine scoring."
@@ -118,8 +177,10 @@ def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = D
         created_by=u.id,
         created_at=datetime.utcnow(),
     )
+
     db.add(r)
     db.commit()
+    db.refresh(r)
 
     log(
         db,
@@ -134,12 +195,12 @@ def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = D
 
 
 @router.get("/{risk_id}/pdf")
-def risk_pdf(risk_id: str, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:pdf:download"))):
-    r = db.get(Risk, risk_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Risk not found")
-    if u.entity_id and r.entity_id != u.entity_id:
-        raise HTTPException(status_code=404, detail="Risk not found")
+def risk_pdf(
+    risk_id: str,
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("risk:pdf:download")),
+):
+    r = _get_scoped_risk(db, risk_id, u)
 
     integrity_hash = make_integrity_hash(r)
     verify_url = f"{settings.BASE_URL}/verify/{r.id}/{integrity_hash}"
