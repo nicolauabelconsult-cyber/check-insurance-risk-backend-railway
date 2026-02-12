@@ -1,4 +1,3 @@
-# app/rbac.py
 from .models import UserRole
 
 # Fonte única de verdade
@@ -30,7 +29,7 @@ PERMS_BY_ROLE = {
     },
 }
 
-# ✅ Compatibilidade total com imports antigos
+# ✅ compatibilidade total com imports antigos
 ROLE_PERMS = PERMS_BY_ROLE
 
 def has_perm(role: UserRole, perm: str) -> bool:
