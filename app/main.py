@@ -23,7 +23,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routes
 app.include_router(auth.router)
 app.include_router(entities.router)
 app.include_router(users.router)
