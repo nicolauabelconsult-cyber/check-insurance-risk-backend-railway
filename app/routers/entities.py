@@ -2,11 +2,11 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..db import get_db
-from ..deps import require_perm
-from ..models import Entity, EntityType, EntityStatus
-from ..schemas import EntityOut, EntityCreate, EntityUpdate
-from ..audit import log
+from app.db import get_db
+from app.deps import require_perm
+from app.models import Entity, EntityType, EntityStatus
+from app.schemas import EntityOut, EntityCreate, EntityUpdate
+from app.audit import log
 
 router = APIRouter(prefix="/entities", tags=["entities"])
 
