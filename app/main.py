@@ -1,50 +1,32 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.settings import settings
 from app.db import get_db
-
-from app.routers import auth, entities, users, sources, risks, audit
 from app.models import Risk
+from app.pdfs import make_integrity_hash, make_server_signature
 
-# Router Excel seguros (se existir)
-try:
-    from app.routers import insurance_sources
-    HAS_INSURANCE = True
-except Exception:
-    HAS_INSURANCE = False
+# Routers
+from app.routers import auth, entities, users, sources, risks, audit, public
+from app.routers import insurance_sources  # router novo
 
-# RBAC compatibilidade
-try:
-    from app.rbac import ROLE_PERMS  # noqa: F401
-except Exception:
-    try:
-        from app.rbac import PERMS_BY_ROLE as ROLE_PERMS  # noqa: F401
-    except Exception:
-        ROLE_PERMS = {}  # noqa: F401
 
+def _parse_origins(value: str | None) -> list[str]:
+    if not value:
+        return ["*"]
+    parts = [x.strip() for x in value.split(",") if x.strip()]
+    return parts or ["*"]
+
+
+origins = _parse_origins(getattr(settings, "CORS_ORIGINS", None))
 
 app = FastAPI(
-    title="Check Insurance Risk API",
-    version=getattr(settings, "APP_VERSION", "1.0"),
-    docs_url="/docs",
-    redoc_url="/redoc",
+    title=getattr(settings, "APP_NAME", "Check Insurance Risk API"),
+    version=getattr(settings, "APP_VERSION", "v1.0"),
 )
-
-# -------------------------
-# CORS
-# -------------------------
-origins = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "https://checkinsurancerisk.com",
-    getattr(settings, "FRONTEND_URL", None),
-]
-origins = [o for o in origins if o]
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,66 +34,47 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
-# -------------------------
+
+@app.get("/health")
+def health():
+    return {"service": "Check Insurance Risk API", "status": "ok"}
+
+
+# ---------
+# Public verification (hash)
+# ---------
+@app.get("/verify/{risk_id}/{hash_value}", response_model=None)
+def verify_document(risk_id: str, hash_value: str, db: Session = Depends(get_db)):
+    r = db.get(Risk, risk_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Risk not found")
+
+    expected = make_integrity_hash(r)
+    valid = (expected == hash_value)
+
+    # opcional: devolve também assinatura do servidor para comparação
+    signature = make_server_signature(expected)
+
+    return {
+        "risk_id": risk_id,
+        "provided_hash": hash_value,
+        "expected_hash": expected,
+        "valid": valid,
+        "server_signature": signature,
+    }
+
+
+# ---------
 # Routers
-# -------------------------
+# ---------
 app.include_router(auth.router)
 app.include_router(entities.router)
 app.include_router(users.router)
 app.include_router(sources.router)
 app.include_router(risks.router)
 app.include_router(audit.router)
-
-if HAS_INSURANCE:
-    app.include_router(insurance_sources.router)
-
-# -------------------------
-# Health
-# -------------------------
-@app.get("/health")
-def health():
-    return {
-        "status": "ok",
-        "app": "Check Insurance Risk",
-        "version": getattr(settings, "APP_VERSION", "1.0"),
-        "env": getattr(settings, "APP_ENV", "production"),
-    }
-
-# -------------------------
-# QR Verify (public)
-# -------------------------
-@app.get("/verify/{risk_id}/{hash_value}")
-def verify_document(risk_id: str, hash_value: str, db: Session = Depends(get_db)):
-    risk = db.get(Risk, risk_id)
-    if not risk:
-        raise HTTPException(status_code=404, detail="Risk not found")
-
-    from app.pdfs import make_integrity_hash
-
-    current_hash = make_integrity_hash(risk)
-
-    return {
-        "risk_id": risk_id,
-        "valid": current_hash == hash_value,
-        "expected_hash": current_hash,
-        "provided_hash": hash_value,
-    }
-
-# -------------------------
-# Root
-# -------------------------
-@app.get("/")
-def root():
-    return {"message": "Check Insurance Risk API", "docs": "/docs", "status": "running"}
-
-# -------------------------
-# Error handler
-# -------------------------
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    return JSONResponse(
-        status_code=500,
-        content={"error": "Internal Server Error", "detail": str(exc)},
-    )
+app.include_router(public.router)
+app.include_router(insurance_sources.router)
