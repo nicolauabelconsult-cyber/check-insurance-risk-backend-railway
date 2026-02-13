@@ -83,68 +83,28 @@ def _ensure_underwriting(db: Session, r: Risk):
 # Endpoints
 # -------------------------
 
-@router.get("", response_model=list[RiskOut])
-def list_risks(db: Session = Depends(get_db), u: User = Depends(require_perm("risk:read"))):
-    q = db.query(Risk)
-    if u.entity_id:
-        q = q.filter(Risk.entity_id == u.entity_id)
-
-    rows = q.order_by(Risk.created_at.desc()).limit(200).all()
-    return [_risk_to_out(r) for r in rows]
-
-
-@router.get("/{risk_id}", response_model=RiskOut)
-def get_risk(risk_id: str, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:read"))):
-    r = db.get(Risk, risk_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Risk not found")
-    _guard_risk_scope(u, r)
-    return _risk_to_out(r)
-
-
-@router.post("/search", response_model=RiskSearchOut)
-def search_risk(body: RiskSearchIn, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:create"))):
-    entity_id = _resolve_entity_id(u, getattr(body, "entity_id", None))
-
-    base = (body.name or "").strip()
-    if not base:
-        raise HTTPException(status_code=400, detail="name is required")
-
-    candidates = []
-    for i in range(1, 4):
-        cid = str(uuid.uuid4())
-        candidates.append(
-            CandidateOut(
-                id=cid,
-                full_name=f"{base} {i}",
-                nationality=body.nationality,
-                dob=None,
-                doc_type=None,
-                doc_last4=None,
-                sources=["OFAC", "UN", "Local Watchlists"],
-                match_score=90 - (i * 7),
-            )
-        )
-
-    log(db, "RISK_SEARCH", actor=u, entity=None, target_ref=base, meta={"entity_id": entity_id})
-
-    return RiskSearchOut(disambiguation_required=True, candidates=candidates)
-
-
 @router.post("/confirm", response_model=RiskOut)
 def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:confirm"))):
-    entity_id = _resolve_entity_id(u, getattr(body, "entity_id", None))
+    entity_id = _resolve_entity_id(u, body.entity_id)
 
-    # Mock scoring (motor real depois)
-    score_int = 78
+    score_int = 50
     score = str(score_int)
 
-    summary = (
-        "Avaliação mock concluída. Preparado para motor real (KYC/AML/PEP) com rastreabilidade de motivos."
+    from app.services.compliance_matching import pep_match
+
+    pep_hits = pep_match(
+        db=db,
+        entity_id=entity_id,
+        full_name=body.name,
+        bi=body.id_number if body.id_type == "BI" else None,
+        passport=body.id_number if body.id_type == "PASSPORT" else None,
     )
-    matches = [
-        {"source": "OFAC", "match": True, "confidence": 0.82, "note": "Similaridade de nome (mock)"}
-    ]
+
+    if pep_hits:
+        score_int = 85
+        score = str(score_int)
+
+    summary = "Avaliação baseada em triagem PEP interna."
 
     r = Risk(
         id=str(uuid.uuid4()),
@@ -155,7 +115,7 @@ def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = D
         query_passport=body.id_number if body.id_type == "PASSPORT" else None,
         score=score,
         summary=summary,
-        matches=matches,
+        matches=pep_hits,
         status=RiskStatus.DONE,
         created_by=u.id,
         created_at=datetime.utcnow(),
@@ -163,64 +123,4 @@ def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = D
     db.add(r)
     db.commit()
 
-    # Underwriting (pagamentos/sinistros/apólices/fraude/cancelamentos)
-    uw = compute_underwriting(
-        db=db,
-        entity_id=entity_id,
-        bi=r.query_bi,
-        passport=r.query_passport,
-        full_name=r.query_name,
-    )
-    r.uw_score = uw["uw_score"]
-    r.uw_decision = uw["uw_decision"]
-    r.uw_summary = uw["uw_summary"]
-    r.uw_kpis = uw["uw_kpis"]
-    r.uw_factors = uw["uw_factors"]
-    db.add(r)
-    db.commit()
-
-    log(db, "RISK_CONFIRM", actor=u, entity=None, target_ref=r.id, meta={"entity_id": entity_id, "score": score_int})
-
     return _risk_to_out(r)
-
-
-@router.get("/{risk_id}/pdf")
-def risk_pdf(risk_id: str, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:pdf:download"))):
-    r = db.get(Risk, risk_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Risk not found")
-    _guard_risk_scope(u, r)
-
-    # garante underwriting para risks antigos
-    _ensure_underwriting(db, r)
-
-    integrity_hash = make_integrity_hash(r)
-    verify_url = f"{settings.BASE_URL}/verify/{r.id}/{integrity_hash}"
-    server_signature = make_server_signature(integrity_hash)
-
-    try:
-        pdf_bytes = build_risk_pdf_institutional(
-            risk=r,
-            analyst_name=u.name,
-            generated_at=datetime.utcnow(),
-            integrity_hash=integrity_hash,
-            server_signature=server_signature,
-            verify_url=verify_url,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PDF generation failed: {type(e).__name__}: {e}")
-
-    log(
-        db,
-        "RISK_PDF_DOWNLOAD",
-        actor=u,
-        entity=None,
-        target_ref=r.id,
-        meta={"entity_id": r.entity_id, "hash": integrity_hash},
-    )
-
-    return StreamingResponse(
-        BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="risk_{r.id}.pdf"'},
-    )
