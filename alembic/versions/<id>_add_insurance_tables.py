@@ -1,7 +1,7 @@
 """add insurance tables
 
 Revision ID: 9b8c1a2f0c44
-Revises: PUT_YOUR_DOWN_REVISION_HERE
+Revises: 
 Create Date: 2026-02-13 00:00:00.000000
 """
 
@@ -10,11 +10,11 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 
-
-# ⚠️ Ajusta estes 2 campos:
 revision = "9b8c1a2f0c44"
-down_revision = "PUT_YOUR_DOWN_REVISION_HERE"
+down_revision = None
 branch_labels = None
+depends_on = None
+e
 depends_on = None
 
 
