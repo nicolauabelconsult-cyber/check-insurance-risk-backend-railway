@@ -1,7 +1,7 @@
 """add insurance tables
 
 Revision ID: 9b8c1a2f0c44
-Revises: 
+Revises:
 Create Date: 2026-02-13 00:00:00.000000
 """
 
@@ -13,8 +13,6 @@ import sqlalchemy as sa
 revision = "9b8c1a2f0c44"
 down_revision = None
 branch_labels = None
-depends_on = None
-e
 depends_on = None
 
 
@@ -173,8 +171,6 @@ def upgrade():
 
 
 def downgrade():
-    # Drop indexes + tables (ordem inversa)
-
     op.drop_index("ix_fraud_entity_bi_pass", table_name="insurance_fraud_flags")
     op.drop_index("ix_insurance_fraud_flags_full_name", table_name="insurance_fraud_flags")
     op.drop_index("ix_insurance_fraud_flags_passport", table_name="insurance_fraud_flags")
