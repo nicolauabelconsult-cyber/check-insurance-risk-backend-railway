@@ -13,6 +13,9 @@ from app.pdfs import make_integrity_hash, make_server_signature
 from app.routers import auth, entities, users, sources, risks, audit, public
 from app.routers import insurance_sources  # router novo
 
+from app.routers import compliance_sources
+app.include_router(compliance_sources.router)
+
 
 def _parse_origins(value: str | None) -> list[str]:
     if not value:
