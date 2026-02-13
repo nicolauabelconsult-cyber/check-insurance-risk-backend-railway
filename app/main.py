@@ -9,12 +9,17 @@ from app.db import get_db
 from app.models import Risk
 from app.pdfs import make_integrity_hash, make_server_signature
 
-# Routers existentes
-from app.routers import auth, entities, users, sources, risks, audit, public
+from app.routers.auth import router as auth_router
+from app.routers.entities import router as entities_router
+from app.routers.users import router as users_router
+from app.routers.sources import router as sources_router
+from app.routers.risks import router as risks_router
+from app.routers.audit import router as audit_router
+from app.routers.public import router as public_router
 
-# Novos routers
-from app.routers import insurance_sources
-from app.routers import compliance_sources
+# novos
+from app.routers.insurance_sources import router as insurance_sources_router
+from app.routers.compliance_sources import router as compliance_sources_router
 
 
 def _parse_origins(value: str | None) -> list[str]:
@@ -24,14 +29,13 @@ def _parse_origins(value: str | None) -> list[str]:
     return parts or ["*"]
 
 
-origins = _parse_origins(getattr(settings, "CORS_ORIGINS", None))
-
 app = FastAPI(
     title=getattr(settings, "APP_NAME", "Check Insurance Risk API"),
     version=getattr(settings, "APP_VERSION", "v1.0"),
 )
 
-# CORS
+origins = _parse_origins(getattr(settings, "CORS_ORIGINS", None))
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -47,9 +51,6 @@ def health():
     return {"service": "Check Insurance Risk API", "status": "ok"}
 
 
-# ------------------------
-# Public verification route
-# ------------------------
 @app.get("/verify/{risk_id}/{hash_value}", response_model=None)
 def verify_document(risk_id: str, hash_value: str, db: Session = Depends(get_db)):
     r = db.get(Risk, risk_id)
@@ -69,17 +70,15 @@ def verify_document(risk_id: str, hash_value: str, db: Session = Depends(get_db)
     }
 
 
-# ------------------------
-# Include routers (DEPOIS do app existir)
-# ------------------------
-app.include_router(auth.router)
-app.include_router(entities.router)
-app.include_router(users.router)
-app.include_router(sources.router)
-app.include_router(risks.router)
-app.include_router(audit.router)
-app.include_router(public.router)
+# Routers
+app.include_router(auth_router)
+app.include_router(entities_router)
+app.include_router(users_router)
+app.include_router(sources_router)
+app.include_router(risks_router)  # <<< ESTE É O CRÍTICO
+app.include_router(audit_router)
+app.include_router(public_router)
 
 # novos
-app.include_router(insurance_sources.router)
-app.include_router(compliance_sources.router)
+app.include_router(insurance_sources_router)
+app.include_router(compliance_sources_router)
