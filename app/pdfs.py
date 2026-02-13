@@ -32,7 +32,6 @@ from app.models import Risk
 # =========================================================
 
 def classificar_risco(score: int) -> str:
-    # Política institucional (ajustável)
     if score >= 70:
         return "ALTO"
     if score >= 40:
@@ -85,11 +84,6 @@ def make_server_signature(integrity_hash: str) -> str:
 
 
 def make_report_number(risk: Risk) -> str:
-    """
-    Banco-ready sem migração:
-    número determinístico baseado em data + parte do UUID.
-    (Se quiseres sequência real por entidade, adicionamos tabela e migration.)
-    """
     dt = risk.created_at or datetime.utcnow()
     ymd = dt.strftime("%Y%m%d")
     short = str(risk.id).split("-")[0].upper()
@@ -97,7 +91,7 @@ def make_report_number(risk: Risk) -> str:
 
 
 # =========================================================
-# 3) Normalização de dados (preparado para motor real)
+# 3) Normalização de dados (motor real ready)
 # =========================================================
 
 def _safe_int(v: Any, default: int = 0) -> int:
@@ -107,17 +101,18 @@ def _safe_int(v: Any, default: int = 0) -> int:
         return default
 
 
+def _safe_float(v: Any, default: float = 0.0) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
 def _risk_factors(risk: Risk) -> Dict[str, int]:
-    """
-    Preparado para motor real.
-    - Se o motor gravar risk.risk_factors (dict), usamos.
-    - Se ainda não existir, geramos um breakdown básico a partir dos matches.
-    """
     factors = getattr(risk, "risk_factors", None)
     if isinstance(factors, dict) and factors:
         return {str(k): _safe_int(v, 0) for k, v in factors.items()}
 
-    # Fallback (MVP): estimativa a partir de matches
     matches = risk.matches or []
     score = _safe_int(getattr(risk, "score", 0), 0)
 
@@ -128,12 +123,11 @@ def _risk_factors(risk: Risk) -> Dict[str, int]:
         "adverse_media_score": 0,
         "jurisdiction_score": 0,
         "name_similarity_score": 0,
+        "insurance_behavior_score": 0,  # novo: comportamento segurável
     }
 
     for m in matches:
-        if not isinstance(m, dict):
-            continue
-        if not m.get("match"):
+        if not isinstance(m, dict) or not m.get("match"):
             continue
 
         mtype = str(m.get("type") or m.get("risk_type") or "").upper().strip()
@@ -149,16 +143,13 @@ def _risk_factors(risk: Risk) -> Dict[str, int]:
             buckets["watchlist_score"] += 10
 
         conf = m.get("confidence")
-        try:
-            c = float(conf) if conf is not None else 0.0
-        except Exception:
-            c = 0.0
-
+        c = _safe_float(conf, 0.0)
         if c >= 0.80:
             buckets["name_similarity_score"] += 8
         elif c >= 0.60:
             buckets["name_similarity_score"] += 4
 
+    # Ajuste proporcional
     total = sum(buckets.values())
     if total > 0 and score > 0:
         scale = score / total
@@ -218,13 +209,25 @@ def _drivers(risk: Risk, score_int: int) -> List[str]:
     for m in (risk.matches or []):
         if not isinstance(m, dict) or not m.get("match"):
             continue
-        conf = m.get("confidence")
-        try:
-            c = float(conf) if conf is not None else 0.0
-        except Exception:
-            c = 0.0
+        c = _safe_float(m.get("confidence"), 0.0)
         if c >= 0.80:
             out.append(f"Correspondência com elevada confiança ({c*100:.0f}%) na fonte {str(m.get('source','')).strip()}.")
+
+    # Acrescentar drivers de seguro se existirem
+    insurance = getattr(risk, "insurance_profile", None)
+    if isinstance(insurance, dict) and insurance:
+        pb = insurance.get("payment_behavior") or {}
+        ch = insurance.get("claims_history") or {}
+        late12 = _safe_int(pb.get("late_payments_12m"), 0)
+        defaults36 = _safe_int(pb.get("defaults_36m"), 0)
+        claims12 = _safe_int(ch.get("claims_12m"), 0)
+        claims36 = _safe_int(ch.get("claims_36m"), 0)
+        if defaults36 > 0:
+            out.append("Histórico indica incumprimentos (defaults) nos últimos 36 meses.")
+        if late12 >= 3:
+            out.append("Histórico indica múltiplos atrasos de pagamento nos últimos 12 meses.")
+        if claims12 >= 2 or claims36 >= 4:
+            out.append("Histórico indica frequência elevada de sinistros.")
 
     if not out:
         out.append("Não foram identificados fatores agravantes relevantes na informação disponível para este processo.")
@@ -235,6 +238,7 @@ def _drivers(risk: Risk, score_int: int) -> List[str]:
     elif nivel == "MÉDIO":
         out.append("A classificação global indica necessidade de validações adicionais antes de decisão final.")
 
+    # remover duplicados
     seen = set()
     final = []
     for d in out:
@@ -247,16 +251,17 @@ def _drivers(risk: Risk, score_int: int) -> List[str]:
 
 
 # =========================================================
-# 4) Underwriting (decisão para apólices) - motor-ready
+# 4) Underwriting (apólices) + comportamento segurável
 # =========================================================
 
-def _underwriting_recommendation(score: int, grouped: dict) -> Tuple[str, str, List[str], List[str]]:
+def _underwriting_recommendation(score: int, grouped: dict, insurance_profile: dict | None) -> Tuple[str, str, List[str], List[str], str]:
     """
     Retorna:
-    - decisão (ACEITAR | ACEITAR COM CONDIÇÕES | ESCALAR | RECUSAR)
-    - racional curto
-    - condições sugeridas
-    - ações obrigatórias antes de emitir
+    - decisão
+    - racional
+    - condições
+    - ações
+    - sugestão de ajuste de prémio (texto)
     """
     has_sanctions_positive = any(m.get("match") for m in grouped.get("SANÇÕES", []))
     has_pep_positive = any(m.get("match") for m in grouped.get("PEP", []))
@@ -266,8 +271,9 @@ def _underwriting_recommendation(score: int, grouped: dict) -> Tuple[str, str, L
 
     condicoes: List[str] = []
     acoes: List[str] = []
+    premium_hint = "Sem ajuste recomendado (referência)."
 
-    # Hard-stop típico
+    # Hard-stop
     if has_sanctions_positive:
         decisao = "RECUSAR"
         racional = "Correspondência positiva em listas de sanções internacionais (hard-stop para subscrição)."
@@ -275,7 +281,24 @@ def _underwriting_recommendation(score: int, grouped: dict) -> Tuple[str, str, L
             "Bloquear emissão de apólice até confirmação e parecer do Compliance.",
             "Registar ocorrência e acionar procedimento interno de sanções.",
         ]
-        return decisao, racional, condicoes, acoes
+        premium_hint = "Não aplicável (recusa)."
+        return decisao, racional, condicoes, acoes, premium_hint
+
+    # Ajustes por perfil segurável
+    bad_payer = False
+    high_claims = False
+
+    if isinstance(insurance_profile, dict) and insurance_profile:
+        pb = insurance_profile.get("payment_behavior") or {}
+        ch = insurance_profile.get("claims_history") or {}
+
+        late12 = _safe_int(pb.get("late_payments_12m"), 0)
+        defaults36 = _safe_int(pb.get("defaults_36m"), 0)
+        claims12 = _safe_int(ch.get("claims_12m"), 0)
+        claims36 = _safe_int(ch.get("claims_36m"), 0)
+
+        bad_payer = (defaults36 > 0) or (late12 >= 3)
+        high_claims = (claims12 >= 2) or (claims36 >= 4)
 
     if nivel == "ALTO":
         decisao = "ESCALAR"
@@ -294,7 +317,13 @@ def _underwriting_recommendation(score: int, grouped: dict) -> Tuple[str, str, L
             acoes.append("Aplicar EDD específico para PEP e validação de relacionamento/mandato.")
         if has_media_positive:
             acoes.append("Recolher evidências adicionais e análise reputacional antes da decisão.")
-        return decisao, racional, condicoes, acoes
+
+        if bad_payer or high_claims:
+            premium_hint = "Sugere-se agravamento adicional do prémio e reforço de franquia devido a histórico de pagamento/sinistros."
+        else:
+            premium_hint = "Sugere-se agravamento do prémio (referência) conforme política para risco ALTO."
+
+        return decisao, racional, condicoes, acoes, premium_hint
 
     if nivel == "MÉDIO":
         decisao = "ACEITAR COM CONDIÇÕES"
@@ -311,13 +340,31 @@ def _underwriting_recommendation(score: int, grouped: dict) -> Tuple[str, str, L
             acoes.append("Revisão adicional por Compliance (PEP).")
         if has_media_positive:
             acoes.append("Análise reputacional complementar.")
-        return decisao, racional, condicoes, acoes
+
+        if bad_payer and high_claims:
+            premium_hint = "Sugere-se agravamento do prémio (ex.: +15% a +30%) e franquia reforçada devido a mau pagador e alta sinistralidade."
+        elif bad_payer:
+            premium_hint = "Sugere-se agravamento moderado do prémio e condições de pagamento mais restritivas (mau pagador)."
+        elif high_claims:
+            premium_hint = "Sugere-se agravamento do prémio e ajustes de franquia/limites devido a histórico de sinistros."
+        else:
+            premium_hint = "Sem agravamento significativo (pode manter condições padrão com mitigadores)."
+
+        return decisao, racional, condicoes, acoes, premium_hint
 
     decisao = "ACEITAR"
     racional = "Risco baixo: subscrição sob condições padrão."
     condicoes = ["Condições padrão do produto."]
     acoes = ["Manter monitorização standard e revisão periódica, conforme política."]
-    return decisao, racional, condicoes, acoes
+
+    if bad_payer or high_claims:
+        decisao = "ACEITAR COM CONDIÇÕES"
+        racional = "Risco baixo em compliance, mas histórico segurável exige mitigação."
+        premium_hint = "Sugere-se ajuste de prémio/franquia baseado em histórico de pagamento/sinistros."
+    else:
+        premium_hint = "Sem ajuste recomendado (histórico favorável ou não disponível)."
+
+    return decisao, racional, condicoes, acoes, premium_hint
 
 
 def _render_bullets(items: List[str]) -> str:
@@ -378,7 +425,7 @@ def _table(data: List[List[str]], col_widths: List[float], header: bool = True) 
 
 
 # =========================================================
-# 6) PDF Banco-ready (Português + Underwriting)
+# 6) PDF Banco-ready + Underwriting + Perfil Segurador
 # =========================================================
 
 def build_risk_pdf_institutional(
@@ -404,61 +451,25 @@ def build_risk_pdf_institutional(
 
     styles = getSampleStyleSheet()
 
-    H1 = ParagraphStyle(
-        "H1",
-        parent=styles["Title"],
-        fontSize=15.5,
-        textColor=colors.HexColor("#0A1F44"),
-        spaceAfter=6,
-    )
-    H2 = ParagraphStyle(
-        "H2",
-        parent=styles["Heading2"],
-        fontSize=11,
-        textColor=colors.HexColor("#0A1F44"),
-        spaceBefore=10,
-        spaceAfter=6,
-    )
-    normal = ParagraphStyle(
-        "N",
-        parent=styles["Normal"],
-        fontSize=9,
-        leading=12,
-    )
-    small_grey = ParagraphStyle(
-        "SG",
-        parent=styles["Normal"],
-        fontSize=7.8,
-        textColor=colors.grey,
-        leading=10,
-    )
+    H1 = ParagraphStyle("H1", parent=styles["Title"], fontSize=15.5, textColor=colors.HexColor("#0A1F44"))
+    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=11, textColor=colors.HexColor("#0A1F44"), spaceBefore=10, spaceAfter=6)
+    normal = ParagraphStyle("N", parent=styles["Normal"], fontSize=9, leading=12)
+    small_grey = ParagraphStyle("SG", parent=styles["Normal"], fontSize=7.8, textColor=colors.grey, leading=10)
 
     elements: List[Any] = []
 
-    # ---------- Cabeçalho ----------
+    # Cabeçalho
     logo = _maybe_logo()
     left = []
     if logo:
         left.append(logo)
     left.append(Paragraph("<b>CHECK INSURANCE RISK</b><br/>KYC • AML • PEP • Due Diligence", small_grey))
 
-    header = Table(
-        [[left, Paragraph("<b>Relatório de Avaliação de Risco de Compliance</b>", H1)]],
-        colWidths=[70 * mm, 110 * mm],
-    )
-    header.setStyle(
-        TableStyle(
-            [
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LINEBELOW", (0, 0), (-1, 0), 0.6, colors.HexColor("#0A1F44")),
-                ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
-            ]
-        )
-    )
+    header = Table([[left, Paragraph("<b>Relatório de Avaliação de Risco de Compliance</b>", H1)]], colWidths=[70 * mm, 110 * mm])
+    header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, colors.HexColor("#0A1F44")), ("BOTTOMPADDING", (0, 0), (-1, 0), 8)]))
     elements.append(header)
     elements.append(Spacer(1, 8))
 
-    # ---------- Metadados ----------
     report_no = make_report_number(risk)
     score_int = _safe_int(getattr(risk, "score", 0), 0)
     nivel = classificar_risco(score_int)
@@ -477,17 +488,12 @@ def build_risk_pdf_institutional(
     ]
     elements.append(_table([["Campo", "Valor"]] + meta, [50 * mm, 130 * mm]))
 
-    # ---------- Resumo Executivo ----------
+    # Resumo executivo
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Resumo Executivo", H2))
-    resumo = (
-        f"O processo avaliado apresenta classificação de risco <b>{nivel}</b>, "
-        f"com score global de <b>{score_int}</b>. "
-        f"{interpretar_score(score_int)}"
-    )
-    elements.append(Paragraph(resumo, normal))
+    elements.append(Paragraph(f"O processo avaliado apresenta classificação de risco <b>{nivel}</b>, com score global de <b>{score_int}</b>. {interpretar_score(score_int)}", normal))
 
-    # ---------- Identificação ----------
+    # Identificação
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Identificação do Sujeito Avaliado", H2))
     subj = [
@@ -499,7 +505,7 @@ def build_risk_pdf_institutional(
     ]
     elements.append(_table([["Campo", "Valor"]] + subj, [50 * mm, 130 * mm]))
 
-    # ---------- Composição do Score ----------
+    # Composição do score
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Composição do Score (Modelo Ponderado)", H2))
     factors = _risk_factors(risk)
@@ -509,12 +515,11 @@ def build_risk_pdf_institutional(
         label = k.replace("_", " ").replace("score", "").strip().title()
         factor_rows.append([label, str(v)])
         total_calc += _safe_int(v, 0)
-
     factor_rows.append(["Total calculado (referência)", str(total_calc)])
     factor_rows.append(["Score final (motor)", str(score_int)])
     elements.append(_table(factor_rows, [120 * mm, 60 * mm], header=True))
 
-    # ---------- Correspondências por tipo ----------
+    # Screening por categoria
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Resultados de Screening (por Categoria)", H2))
     grouped = _matches_by_type(risk)
@@ -525,25 +530,20 @@ def build_risk_pdf_institutional(
             elements.append(Paragraph("Sem correspondências relevantes identificadas.", small_grey))
             elements.append(Spacer(1, 4))
             return
-
         rows = [["Fonte", "Correspondência", "Confiança", "Detalhe"]]
         for m in items[:20]:
             match_txt = "SIM" if m.get("match") else "NÃO"
-            conf_txt = ""
             conf = m.get("confidence")
             try:
                 conf_txt = f"{float(conf) * 100:.0f}%" if conf is not None else ""
             except Exception:
                 conf_txt = str(conf) if conf is not None else ""
-
             detail_bits = []
             for key in ("program", "category", "role", "position", "country", "note"):
                 if m.get(key):
                     detail_bits.append(f"{key}: {m.get(key)}")
             detail = " | ".join(detail_bits) if detail_bits else (m.get("note") or "")
-
             rows.append([str(m.get("source", "")), match_txt, conf_txt, str(detail)])
-
         elements.append(_table(rows, [45 * mm, 25 * mm, 25 * mm, 85 * mm], header=True))
         elements.append(Spacer(1, 6))
 
@@ -554,19 +554,97 @@ def build_risk_pdf_institutional(
     if grouped["OUTROS"]:
         render_group("OUTROS", grouped["OUTROS"])
 
-    # ---------- Motivos ----------
+    # Motivos
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Motivos e Fatores Determinantes do Score", H2))
     for d in _drivers(risk, score_int):
         elements.append(Paragraph(f"• {d}", normal))
 
-    # ---------- Recomendação Compliance ----------
+    # Recomendação compliance
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Recomendação de Compliance", H2))
-    rec = recomendacao_operacional(score_int).replace("\n", "<br/>")
-    elements.append(Paragraph(rec, normal))
+    elements.append(Paragraph(recomendacao_operacional(score_int).replace("\n", "<br/>"), normal))
 
-    # ---------- Decisão Underwriting ----------
+    # Perfil segurador e histórico (NOVO)
+    elements.append(Spacer(1, 10))
+    elements.append(Paragraph("Perfil Segurador e Histórico (para Subscrição)", H2))
+
+    insurance = getattr(risk, "insurance_profile", None)
+    if isinstance(insurance, dict) and insurance:
+        pb = insurance.get("payment_behavior") or {}
+        ch = insurance.get("claims_history") or {}
+        active = insurance.get("active_policies") or []
+        canc = insurance.get("cancellations") or []
+        fraud = insurance.get("fraud_indicators") or []
+
+        payer_score = _safe_float(insurance.get("payer_score"), 0.0)
+
+        pay_table = [
+            ["Indicador", "Valor"],
+            ["Índice de Pagador (0-1)", f"{payer_score:.2f}"],
+            ["Pagamentos em dia (ratio)", f"{_safe_float(pb.get('on_time_ratio'), 0.0):.2f}"],
+            ["Atrasos (12 meses)", str(_safe_int(pb.get("late_payments_12m"), 0))],
+            ["Incumprimentos (36 meses)", str(_safe_int(pb.get("defaults_36m"), 0))],
+            ["Média de atraso (dias)", str(_safe_int(pb.get("avg_delay_days"), 0))],
+        ]
+        elements.append(_table(pay_table, [80 * mm, 100 * mm], header=True))
+
+        elements.append(Spacer(1, 6))
+        claims_table = [
+            ["Indicador", "Valor"],
+            ["Sinistros (12 meses)", str(_safe_int(ch.get("claims_12m"), 0))],
+            ["Sinistros (36 meses)", str(_safe_int(ch.get("claims_36m"), 0))],
+            ["Total pago (36 meses)", str(_safe_int(ch.get("total_paid_36m"), 0))],
+            ["Maior sinistro", str(_safe_int(ch.get("max_single_claim"), 0))],
+            ["Risco de frequência", str(ch.get("frequency_risk") or "—")],
+            ["Risco de severidade", str(ch.get("severity_risk") or "—")],
+        ]
+        elements.append(_table(claims_table, [80 * mm, 100 * mm], header=True))
+
+        # Apólices ativas
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph("<b>Apólices ativas</b>", normal))
+        if active:
+            rows = [["Nº Apólice", "Tipo", "Estado", "Início", "Fim", "Prémio", "Capital"]]
+            for p in active[:15]:
+                rows.append([
+                    str(p.get("policy_no", "")),
+                    str(p.get("type", "")),
+                    str(p.get("status", "")),
+                    str(p.get("start", "")),
+                    str(p.get("end", "")),
+                    str(p.get("premium", "")),
+                    str(p.get("sum_insured", "")),
+                ])
+            elements.append(_table(rows, [25*mm, 25*mm, 18*mm, 20*mm, 20*mm, 25*mm, 27*mm], header=True))
+        else:
+            elements.append(Paragraph("Sem dados de apólices ativas disponíveis.", small_grey))
+
+        # Cancelamentos
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph("<b>Cancelamentos/Rescisões</b>", normal))
+        if canc:
+            rows = [["Nº Apólice", "Motivo", "Data"]]
+            for x in canc[:15]:
+                rows.append([str(x.get("policy_no", "")), str(x.get("reason", "")), str(x.get("date", ""))])
+            elements.append(_table(rows, [40*mm, 110*mm, 30*mm], header=True))
+        else:
+            elements.append(Paragraph("Sem registos de cancelamentos disponíveis.", small_grey))
+
+        # Fraude
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph("<b>Indicadores de Fraude</b>", normal))
+        if fraud:
+            rows = [["Flag", "Severidade", "Nota"]]
+            for f in fraud[:15]:
+                rows.append([str(f.get("flag", "")), str(f.get("severity", "")), str(f.get("note", ""))])
+            elements.append(_table(rows, [45*mm, 30*mm, 105*mm], header=True))
+        else:
+            elements.append(Paragraph("Sem indicadores de fraude reportados.", small_grey))
+    else:
+        elements.append(Paragraph("Sem dados de histórico de seguros (pagamentos, sinistros, apólices ativas) para este processo.", small_grey))
+
+    # Underwriting decisão (agora considera insurance_profile)
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Decisão para Subscrição de Apólices (Underwriting)", H2))
 
@@ -576,13 +654,15 @@ def build_risk_pdf_institutional(
         racional = str(underwriting.get("racional", "—"))
         condicoes = underwriting.get("condicoes", []) or []
         acoes = underwriting.get("acoes_obrigatorias", []) or []
+        premium_hint = str(underwriting.get("ajuste_premio", "—"))
     else:
-        decisao, racional, condicoes, acoes = _underwriting_recommendation(score_int, grouped)
+        decisao, racional, condicoes, acoes, premium_hint = _underwriting_recommendation(score_int, grouped, insurance)
 
     uw_table = [
         ["Campo", "Valor"],
         ["Decisão recomendada", decisao],
         ["Racional", racional],
+        ["Sugestão de ajuste de prémio", premium_hint],
         ["Condições sugeridas", _render_bullets([str(x) for x in condicoes])],
         ["Ações obrigatórias antes de emitir", _render_bullets([str(x) for x in acoes])],
     ]
@@ -602,31 +682,27 @@ def build_risk_pdf_institutional(
     )
     elements.append(uw)
 
-    # ---------- Metodologia ----------
+    # Metodologia
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Metodologia e Nota Legal", H2))
     metodologia = (
-        "A presente avaliação foi gerada por motor automatizado de screening, com base em fontes configuradas "
-        "de sanções internacionais, PEP e listas de observação. O score é produzido por modelo ponderado e "
-        "configurável, sujeito a revisão institucional e validação humana. Este relatório não constitui "
-        "determinação legal, devendo ser interpretado conforme as políticas internas do Banco/Seguradora."
+        "A presente avaliação foi gerada por motor automatizado de screening e por dados internos/externos configurados "
+        "relacionados ao perfil segurador (quando disponíveis). O score é produzido por modelo ponderado e configurável, "
+        "sujeito a revisão institucional e validação humana. Este relatório não constitui determinação legal, devendo ser "
+        "interpretado conforme políticas internas do Banco/Seguradora."
     )
     elements.append(Paragraph(metodologia, normal))
 
-    # ---------- Verificação Digital ----------
+    # Verificação digital
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Verificação Digital do Documento", H2))
-
     qr = _qr_image(verify_url)
 
     url_lines = simpleSplit(verify_url, normal.fontName, normal.fontSize, 120 * mm)
     url_lines = url_lines[:3]
     pretty_url = "<br/>".join(url_lines)
 
-    vt = Table(
-        [[qr, Paragraph(f"<b>Link de verificação:</b><br/>{pretty_url}", normal)]],
-        colWidths=[40 * mm, 140 * mm],
-    )
+    vt = Table([[qr, Paragraph(f"<b>Link de verificação:</b><br/>{pretty_url}", normal)]], colWidths=[40 * mm, 140 * mm])
     vt.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
     elements.append(vt)
 
