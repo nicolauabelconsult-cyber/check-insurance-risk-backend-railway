@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.settings import settings
-from app.db import engine, Base, get_db
+from app.db import get_db
 
-# Routers principais
 from app.routers import auth, entities, users, sources, risks, audit
+from app.models import Risk
 
 # Router Excel seguros (se existir)
 try:
@@ -19,21 +18,15 @@ try:
 except Exception:
     HAS_INSURANCE = False
 
-# RBAC (compatível com versões antigas)
+# RBAC compatibilidade
 try:
-    from app.rbac import ROLE_PERMS
+    from app.rbac import ROLE_PERMS  # noqa: F401
 except Exception:
     try:
-        from app.rbac import PERMS_BY_ROLE as ROLE_PERMS
+        from app.rbac import PERMS_BY_ROLE as ROLE_PERMS  # noqa: F401
     except Exception:
-        ROLE_PERMS = {}
+        ROLE_PERMS = {}  # noqa: F401
 
-from app.models import Risk
-
-
-# =========================================================
-# Inicialização
-# =========================================================
 
 app = FastAPI(
     title="Check Insurance Risk API",
@@ -42,18 +35,15 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-
-# =========================================================
+# -------------------------
 # CORS
-# =========================================================
-
+# -------------------------
 origins = [
     "http://localhost:5173",
     "http://localhost:3000",
     "https://checkinsurancerisk.com",
     getattr(settings, "FRONTEND_URL", None),
 ]
-
 origins = [o for o in origins if o]
 
 app.add_middleware(
@@ -64,11 +54,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# =========================================================
+# -------------------------
 # Routers
-# =========================================================
-
+# -------------------------
 app.include_router(auth.router)
 app.include_router(entities.router)
 app.include_router(users.router)
@@ -79,11 +67,9 @@ app.include_router(audit.router)
 if HAS_INSURANCE:
     app.include_router(insurance_sources.router)
 
-
-# =========================================================
-# Health check
-# =========================================================
-
+# -------------------------
+# Health
+# -------------------------
 @app.get("/health")
 def health():
     return {
@@ -93,13 +79,11 @@ def health():
         "env": getattr(settings, "APP_ENV", "production"),
     }
 
-
-# =========================================================
-# QR Verification Endpoint
-# =========================================================
-
+# -------------------------
+# QR Verify (public)
+# -------------------------
 @app.get("/verify/{risk_id}/{hash_value}")
-def verify_document(risk_id: str, hash_value: str, db: Session = next(get_db())):
+def verify_document(risk_id: str, hash_value: str, db: Session = Depends(get_db)):
     risk = db.get(Risk, risk_id)
     if not risk:
         raise HTTPException(status_code=404, detail="Risk not found")
@@ -115,30 +99,19 @@ def verify_document(risk_id: str, hash_value: str, db: Session = next(get_db()))
         "provided_hash": hash_value,
     }
 
-
-# =========================================================
+# -------------------------
 # Root
-# =========================================================
-
+# -------------------------
 @app.get("/")
 def root():
-    return {
-        "message": "Check Insurance Risk API",
-        "docs": "/docs",
-        "status": "running",
-    }
+    return {"message": "Check Insurance Risk API", "docs": "/docs", "status": "running"}
 
-
-# =========================================================
-# Error handler global
-# =========================================================
-
+# -------------------------
+# Error handler
+# -------------------------
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     return JSONResponse(
         status_code=500,
-        content={
-            "error": "Internal Server Error",
-            "detail": str(exc),
-        },
+        content={"error": "Internal Server Error", "detail": str(exc)},
     )
