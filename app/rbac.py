@@ -37,3 +37,6 @@ def has_perm(role: UserRole, perm: str) -> bool:
 
 def role_perms(role: UserRole) -> list[str]:
     return sorted(list(PERMS_BY_ROLE.get(role, set())))
+
+"compliance:upload",
+
