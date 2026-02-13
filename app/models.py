@@ -100,3 +100,13 @@ class AuditLog(Base):
     meta = Column(JSON, nullable=False, default=dict)
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+from sqlalchemy import Integer, Text
+from sqlalchemy.dialects.postgresql import JSONB  # se estiveres em Postgres
+# se não quiseres JSONB, podes usar sa.JSON no model
+
+uw_score = Column(Integer, nullable=True)
+uw_decision = Column(String, nullable=True)
+uw_summary = Column(Text, nullable=True)
+uw_kpis = Column(JSONB, nullable=True)
+uw_factors = Column(JSONB, nullable=True)
