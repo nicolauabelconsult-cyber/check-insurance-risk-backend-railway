@@ -115,10 +115,9 @@ def _risk_factors(risk: Risk) -> Dict[str, int]:
     """
     factors = getattr(risk, "risk_factors", None)
     if isinstance(factors, dict) and factors:
-        # Garantir ints
         return {str(k): _safe_int(v, 0) for k, v in factors.items()}
 
-    # Fallback inteligente (MVP): estimativa a partir de matches
+    # Fallback (MVP): estimativa a partir de matches
     matches = risk.matches or []
     score = _safe_int(getattr(risk, "score", 0), 0)
 
@@ -140,12 +139,11 @@ def _risk_factors(risk: Risk) -> Dict[str, int]:
         mtype = str(m.get("type") or m.get("risk_type") or "").upper().strip()
         src = str(m.get("source") or "").upper()
 
-        # Heurísticas leves (até o motor real gravar fatores reais)
         if mtype == "SANCTIONS" or "OFAC" in src or "UN" in src:
             buckets["sanctions_score"] += 35
         elif mtype == "PEP":
             buckets["pep_score"] += 20
-        elif mtype == "ADVERSE_MEDIA" or mtype == "MEDIA":
+        elif mtype in {"ADVERSE_MEDIA", "MEDIA"}:
             buckets["adverse_media_score"] += 15
         else:
             buckets["watchlist_score"] += 10
@@ -161,10 +159,8 @@ def _risk_factors(risk: Risk) -> Dict[str, int]:
         elif c >= 0.60:
             buckets["name_similarity_score"] += 4
 
-    # Ajustar para não ultrapassar muito o score (apenas para visual)
     total = sum(buckets.values())
     if total > 0 and score > 0:
-        # Normaliza proporcionalmente para aproximar o score
         scale = score / total
         for k in list(buckets.keys()):
             buckets[k] = int(round(buckets[k] * scale))
@@ -173,10 +169,6 @@ def _risk_factors(risk: Risk) -> Dict[str, int]:
 
 
 def _matches_by_type(risk: Risk) -> Dict[str, List[dict]]:
-    """
-    Agrupa matches por tipo, pronto para crescimento.
-    Tipos esperados: SANCTIONS, PEP, WATCHLIST, ADVERSE_MEDIA.
-    """
     grouped: Dict[str, List[dict]] = {
         "SANÇÕES": [],
         "PEP": [],
@@ -207,18 +199,13 @@ def _matches_by_type(risk: Risk) -> Dict[str, List[dict]]:
 
 
 def _drivers(risk: Risk, score_int: int) -> List[str]:
-    """
-    Fatores determinantes do risco (explicação).
-    Motor real pode gravar risk.risk_drivers = list[str].
-    """
     drivers = getattr(risk, "risk_drivers", None)
     if isinstance(drivers, list) and drivers:
-        return [str(x) for x in drivers][:10]
+        return [str(x) for x in drivers][:12]
 
     grouped = _matches_by_type(risk)
     out: List[str] = []
 
-    # Drivers por categoria
     if any(m.get("match") for m in grouped["SANÇÕES"]):
         out.append("Foram identificadas correspondências positivas em bases de dados de sanções internacionais.")
     if any(m.get("match") for m in grouped["PEP"]):
@@ -228,11 +215,8 @@ def _drivers(risk: Risk, score_int: int) -> List[str]:
     if any(m.get("match") for m in grouped["WATCHLISTS"]):
         out.append("Foram identificadas correspondências em listas de observação/monitorização.")
 
-    # Drivers por confiança alta
     for m in (risk.matches or []):
-        if not isinstance(m, dict):
-            continue
-        if not m.get("match"):
+        if not isinstance(m, dict) or not m.get("match"):
             continue
         conf = m.get("confidence")
         try:
@@ -240,21 +224,17 @@ def _drivers(risk: Risk, score_int: int) -> List[str]:
         except Exception:
             c = 0.0
         if c >= 0.80:
-            out.append(
-                f"Correspondência com elevada confiança ({c*100:.0f}%) na fonte {str(m.get('source','')).strip()}."
-            )
+            out.append(f"Correspondência com elevada confiança ({c*100:.0f}%) na fonte {str(m.get('source','')).strip()}.")
 
     if not out:
         out.append("Não foram identificados fatores agravantes relevantes na informação disponível para este processo.")
 
-    # Complemento por score
     nivel = classificar_risco(score_int)
     if nivel == "ALTO":
         out.append("A classificação global indica necessidade de Due Diligence reforçada e revisão humana obrigatória.")
     elif nivel == "MÉDIO":
         out.append("A classificação global indica necessidade de validações adicionais antes de decisão final.")
 
-    # Remover duplicados preservando ordem
     seen = set()
     final = []
     for d in out:
@@ -267,7 +247,85 @@ def _drivers(risk: Risk, score_int: int) -> List[str]:
 
 
 # =========================================================
-# 4) Elementos gráficos
+# 4) Underwriting (decisão para apólices) - motor-ready
+# =========================================================
+
+def _underwriting_recommendation(score: int, grouped: dict) -> Tuple[str, str, List[str], List[str]]:
+    """
+    Retorna:
+    - decisão (ACEITAR | ACEITAR COM CONDIÇÕES | ESCALAR | RECUSAR)
+    - racional curto
+    - condições sugeridas
+    - ações obrigatórias antes de emitir
+    """
+    has_sanctions_positive = any(m.get("match") for m in grouped.get("SANÇÕES", []))
+    has_pep_positive = any(m.get("match") for m in grouped.get("PEP", []))
+    has_media_positive = any(m.get("match") for m in grouped.get("MEDIA ADVERSA", []))
+
+    nivel = classificar_risco(score)
+
+    condicoes: List[str] = []
+    acoes: List[str] = []
+
+    # Hard-stop típico
+    if has_sanctions_positive:
+        decisao = "RECUSAR"
+        racional = "Correspondência positiva em listas de sanções internacionais (hard-stop para subscrição)."
+        acoes = [
+            "Bloquear emissão de apólice até confirmação e parecer do Compliance.",
+            "Registar ocorrência e acionar procedimento interno de sanções.",
+        ]
+        return decisao, racional, condicoes, acoes
+
+    if nivel == "ALTO":
+        decisao = "ESCALAR"
+        racional = "Risco elevado: requer avaliação do Comité de Subscrição e validação por Compliance."
+        condicoes = [
+            "Aplicar agravamento de prémio (premium loading) conforme grelha interna.",
+            "Aumentar franquia e/ou reduzir limites de cobertura.",
+            "Inserir exclusões específicas conforme o produto e o perfil de risco.",
+        ]
+        acoes = [
+            "Solicitar documentação reforçada do tomador/beneficiário efetivo.",
+            "Validar origem de fundos (quando aplicável) e vínculos societários.",
+            "Revisão por responsável sénior (Underwriting + Compliance).",
+        ]
+        if has_pep_positive:
+            acoes.append("Aplicar EDD específico para PEP e validação de relacionamento/mandato.")
+        if has_media_positive:
+            acoes.append("Recolher evidências adicionais e análise reputacional antes da decisão.")
+        return decisao, racional, condicoes, acoes
+
+    if nivel == "MÉDIO":
+        decisao = "ACEITAR COM CONDIÇÕES"
+        racional = "Risco moderado: emitir com mitigadores e monitorização."
+        condicoes = [
+            "Ajustar franquia ao perfil de risco.",
+            "Definir limites de cobertura por evento/ano e cláusulas de agravamento, conforme produto.",
+        ]
+        acoes = [
+            "Solicitar documentação adicional (identificação, comprovativos, histórico relevante).",
+            "Monitorização reforçada e revisão periódica do risco.",
+        ]
+        if has_pep_positive:
+            acoes.append("Revisão adicional por Compliance (PEP).")
+        if has_media_positive:
+            acoes.append("Análise reputacional complementar.")
+        return decisao, racional, condicoes, acoes
+
+    decisao = "ACEITAR"
+    racional = "Risco baixo: subscrição sob condições padrão."
+    condicoes = ["Condições padrão do produto."]
+    acoes = ["Manter monitorização standard e revisão periódica, conforme política."]
+    return decisao, racional, condicoes, acoes
+
+
+def _render_bullets(items: List[str]) -> str:
+    return "<br/>".join([f"• {x}" for x in items]) if items else "—"
+
+
+# =========================================================
+# 5) Elementos gráficos
 # =========================================================
 
 def _qr_image(verify_url: str) -> Image:
@@ -320,7 +378,7 @@ def _table(data: List[List[str]], col_widths: List[float], header: bool = True) 
 
 
 # =========================================================
-# 5) PDF Banco-ready (Português + motor real ready)
+# 6) PDF Banco-ready (Português + Underwriting)
 # =========================================================
 
 def build_risk_pdf_institutional(
@@ -429,7 +487,7 @@ def build_risk_pdf_institutional(
     )
     elements.append(Paragraph(resumo, normal))
 
-    # ---------- Identificação do sujeito ----------
+    # ---------- Identificação ----------
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Identificação do Sujeito Avaliado", H2))
     subj = [
@@ -454,13 +512,11 @@ def build_risk_pdf_institutional(
 
     factor_rows.append(["Total calculado (referência)", str(total_calc)])
     factor_rows.append(["Score final (motor)", str(score_int)])
-
     elements.append(_table(factor_rows, [120 * mm, 60 * mm], header=True))
 
     # ---------- Correspondências por tipo ----------
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Resultados de Screening (por Categoria)", H2))
-
     grouped = _matches_by_type(risk)
 
     def render_group(title: str, items: List[dict]):
@@ -498,17 +554,53 @@ def build_risk_pdf_institutional(
     if grouped["OUTROS"]:
         render_group("OUTROS", grouped["OUTROS"])
 
-    # ---------- Fatores determinantes ----------
+    # ---------- Motivos ----------
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Motivos e Fatores Determinantes do Score", H2))
     for d in _drivers(risk, score_int):
         elements.append(Paragraph(f"• {d}", normal))
 
-    # ---------- Recomendação ----------
+    # ---------- Recomendação Compliance ----------
     elements.append(Spacer(1, 10))
     elements.append(Paragraph("Recomendação de Compliance", H2))
     rec = recomendacao_operacional(score_int).replace("\n", "<br/>")
     elements.append(Paragraph(rec, normal))
+
+    # ---------- Decisão Underwriting ----------
+    elements.append(Spacer(1, 10))
+    elements.append(Paragraph("Decisão para Subscrição de Apólices (Underwriting)", H2))
+
+    underwriting = getattr(risk, "underwriting", None)
+    if isinstance(underwriting, dict) and underwriting:
+        decisao = str(underwriting.get("decisao", "—"))
+        racional = str(underwriting.get("racional", "—"))
+        condicoes = underwriting.get("condicoes", []) or []
+        acoes = underwriting.get("acoes_obrigatorias", []) or []
+    else:
+        decisao, racional, condicoes, acoes = _underwriting_recommendation(score_int, grouped)
+
+    uw_table = [
+        ["Campo", "Valor"],
+        ["Decisão recomendada", decisao],
+        ["Racional", racional],
+        ["Condições sugeridas", _render_bullets([str(x) for x in condicoes])],
+        ["Ações obrigatórias antes de emitir", _render_bullets([str(x) for x in acoes])],
+    ]
+    uw = Table(uw_table, colWidths=[55 * mm, 125 * mm])
+    uw.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.3, colors.lightgrey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0A1F44")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("FONTSIZE", (0, 0), (-1, -1), 8.7),
+            ]
+        )
+    )
+    elements.append(uw)
 
     # ---------- Metodologia ----------
     elements.append(Spacer(1, 10))
@@ -527,7 +619,6 @@ def build_risk_pdf_institutional(
 
     qr = _qr_image(verify_url)
 
-    # Quebra controlada do URL
     url_lines = simpleSplit(verify_url, normal.fontName, normal.fontSize, 120 * mm)
     url_lines = url_lines[:3]
     pretty_url = "<br/>".join(url_lines)
@@ -543,7 +634,6 @@ def build_risk_pdf_institutional(
     elements.append(Paragraph(f"<b>Hash de integridade:</b> {integrity_hash}", small_grey))
     elements.append(Paragraph(f"<b>Assinatura do sistema:</b> {server_signature}", small_grey))
 
-    # Build com rodapé + paginação
     doc.build(elements, onFirstPage=_footer, onLaterPages=_footer)
 
     buffer.seek(0)
