@@ -1,4 +1,4 @@
-ffrom __future__ import annotations
+from __future__ import annotations
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
