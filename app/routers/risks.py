@@ -11,20 +11,11 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.deps import require_perm
 from app.models import Risk, RiskStatus, User, UserRole
-from app.schemas import (
-    CandidateOut,
-    RiskConfirmIn,
-    RiskOut,
-    RiskSearchIn,
-    RiskSearchOut,
-)
+from app.schemas import CandidateOut, RiskConfirmIn, RiskOut, RiskSearchIn, RiskSearchOut
 from app.audit import log
 from app.settings import settings
-from app.pdfs import (
-    build_risk_pdf_institutional,
-    make_integrity_hash,
-    make_server_signature,
-)
+from app.pdfs import build_risk_pdf_institutional, make_integrity_hash, make_server_signature
+from app.services.underwriting import compute_underwriting
 
 router = APIRouter(prefix="/risks", tags=["risks"])
 
@@ -34,29 +25,17 @@ router = APIRouter(prefix="/risks", tags=["risks"])
 # -------------------------
 
 def _resolve_entity_id(u: User, requested: str | None) -> str:
-    """
-    SUPER_ADMIN/ADMIN: pode atuar em qualquer entity, mas tem de informar entity_id
-    CLIENT: ignora o requested e usa a sua entity_id
-    """
     if u.role in {UserRole.SUPER_ADMIN, UserRole.ADMIN}:
         if not requested:
             raise HTTPException(status_code=400, detail="entity_id required for admins")
         return requested
-
     if not u.entity_id:
         raise HTTPException(status_code=400, detail="User entity_id missing")
-
     return u.entity_id
 
 
 def _guard_risk_scope(u: User, r: Risk):
-    """
-    Blindagem anti acesso cruzado:
-    - Se o utilizador tem entity_id, o risk tem de ser da mesma entidade.
-    - Se não tem entity_id (super admin), segue.
-    """
     if u.entity_id and r.entity_id != u.entity_id:
-        # 404 (e não 403) para não revelar existência de IDs
         raise HTTPException(status_code=404, detail="Risk not found")
 
 
@@ -75,6 +54,31 @@ def _risk_to_out(r: Risk) -> RiskOut:
     )
 
 
+def _ensure_underwriting(db: Session, r: Risk):
+    """
+    Garante underwriting calculado e persistido.
+    (Importante para risks antigos criados antes desta fase.)
+    """
+    if getattr(r, "uw_score", None) is not None:
+        return
+
+    uw = compute_underwriting(
+        db=db,
+        entity_id=r.entity_id,
+        bi=r.query_bi,
+        passport=r.query_passport,
+        full_name=r.query_name,
+    )
+
+    r.uw_score = uw["uw_score"]
+    r.uw_decision = uw["uw_decision"]
+    r.uw_summary = uw["uw_summary"]
+    r.uw_kpis = uw["uw_kpis"]
+    r.uw_factors = uw["uw_factors"]
+    db.add(r)
+    db.commit()
+
+
 # -------------------------
 # Endpoints
 # -------------------------
@@ -82,8 +86,6 @@ def _risk_to_out(r: Risk) -> RiskOut:
 @router.get("", response_model=list[RiskOut])
 def list_risks(db: Session = Depends(get_db), u: User = Depends(require_perm("risk:read"))):
     q = db.query(Risk)
-
-    # scoped por entity_id para clientes
     if u.entity_id:
         q = q.filter(Risk.entity_id == u.entity_id)
 
@@ -96,9 +98,7 @@ def get_risk(risk_id: str, db: Session = Depends(get_db), u: User = Depends(requ
     r = db.get(Risk, risk_id)
     if not r:
         raise HTTPException(status_code=404, detail="Risk not found")
-
     _guard_risk_scope(u, r)
-
     return _risk_to_out(r)
 
 
@@ -110,7 +110,6 @@ def search_risk(body: RiskSearchIn, db: Session = Depends(get_db), u: User = Dep
     if not base:
         raise HTTPException(status_code=400, detail="name is required")
 
-    # Mock engine: gera candidatos a partir do nome
     candidates = []
     for i in range(1, 4):
         cid = str(uuid.uuid4())
@@ -136,24 +135,15 @@ def search_risk(body: RiskSearchIn, db: Session = Depends(get_db), u: User = Dep
 def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:confirm"))):
     entity_id = _resolve_entity_id(u, getattr(body, "entity_id", None))
 
-    # Mock scoring
+    # Mock scoring (motor real depois)
     score_int = 78
     score = str(score_int)
 
-    # ⚠️ Aqui é onde o motor real vai escrever:
-    # - fatores do score
-    # - flags PEP
-    # - sanctions hits
-    # - watchlists
-    summary = "Avaliação mock concluída. Substituir por motor real (KYC/AML/PEP)."
-
+    summary = (
+        "Avaliação mock concluída. Preparado para motor real (KYC/AML/PEP) com rastreabilidade de motivos."
+    )
     matches = [
-        {
-            "source": "OFAC",
-            "match": True,
-            "confidence": 0.82,
-            "note": "Similaridade de nome (mock)",
-        }
+        {"source": "OFAC", "match": True, "confidence": 0.82, "note": "Similaridade de nome (mock)"}
     ]
 
     r = Risk(
@@ -170,18 +160,26 @@ def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = D
         created_by=u.id,
         created_at=datetime.utcnow(),
     )
-
     db.add(r)
     db.commit()
 
-    log(
-        db,
-        "RISK_CONFIRM",
-        actor=u,
-        entity=None,
-        target_ref=r.id,
-        meta={"entity_id": entity_id, "score": score_int},
+    # Underwriting (pagamentos/sinistros/apólices/fraude/cancelamentos)
+    uw = compute_underwriting(
+        db=db,
+        entity_id=entity_id,
+        bi=r.query_bi,
+        passport=r.query_passport,
+        full_name=r.query_name,
     )
+    r.uw_score = uw["uw_score"]
+    r.uw_decision = uw["uw_decision"]
+    r.uw_summary = uw["uw_summary"]
+    r.uw_kpis = uw["uw_kpis"]
+    r.uw_factors = uw["uw_factors"]
+    db.add(r)
+    db.commit()
+
+    log(db, "RISK_CONFIRM", actor=u, entity=None, target_ref=r.id, meta={"entity_id": entity_id, "score": score_int})
 
     return _risk_to_out(r)
 
@@ -191,10 +189,11 @@ def risk_pdf(risk_id: str, db: Session = Depends(get_db), u: User = Depends(requ
     r = db.get(Risk, risk_id)
     if not r:
         raise HTTPException(status_code=404, detail="Risk not found")
-
     _guard_risk_scope(u, r)
 
-    # Hash + assinatura simplificada
+    # garante underwriting para risks antigos
+    _ensure_underwriting(db, r)
+
     integrity_hash = make_integrity_hash(r)
     verify_url = f"{settings.BASE_URL}/verify/{r.id}/{integrity_hash}"
     server_signature = make_server_signature(integrity_hash)
@@ -209,7 +208,6 @@ def risk_pdf(risk_id: str, db: Session = Depends(get_db), u: User = Depends(requ
             verify_url=verify_url,
         )
     except Exception as e:
-        # devolve erro controlado (para veres no frontend/log)
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {type(e).__name__}: {e}")
 
     log(
