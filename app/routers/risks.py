@@ -18,20 +18,22 @@ from app.schemas import (
 )
 from app.audit import log
 from app.settings import settings
+
 from app.pdfs import (
     build_risk_pdf_institutional,
     make_integrity_hash,
     make_server_signature,
+    matches_by_type,
 )
+
+from app.insurance_profile import build_insurance_profile
+from app.underwriting_engine import final_decision
+
 
 router = APIRouter(prefix="/risks", tags=["risks"])
 
 
 def _resolve_entity_id(u: User, requested: str | None) -> str:
-    """
-    Admin/SuperAdmin: must pass entity_id explicitly.
-    Client: always uses its own entity_id (ignores requested).
-    """
     if u.role in {UserRole.SUPER_ADMIN, UserRole.ADMIN}:
         if not requested:
             raise HTTPException(status_code=400, detail="entity_id required for admins")
@@ -56,65 +58,22 @@ def _risk_to_out(r: Risk) -> RiskOut:
     )
 
 
-def _get_scoped_risk(db: Session, risk_id: str, u: User) -> Risk:
-    """
-    Fetch risk and enforce tenant isolation.
-    Return 404 always if not found OR cross-tenant access.
-    """
-    r = db.get(Risk, risk_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Risk not found")
-    if u.entity_id and r.entity_id != u.entity_id:
-        raise HTTPException(status_code=404, detail="Risk not found")
-    return r
-
-
 @router.get("", response_model=list[RiskOut])
-def list_risks(
-    db: Session = Depends(get_db),
-    u: User = Depends(require_perm("risk:read")),
-):
+def list_risks(db: Session = Depends(get_db), u: User = Depends(require_perm("risk:read"))):
     q = db.query(Risk)
-
-    # Tenant scope (client only sees own entity)
     if u.entity_id:
         q = q.filter(Risk.entity_id == u.entity_id)
-
     rows = q.order_by(Risk.created_at.desc()).limit(200).all()
     return [_risk_to_out(r) for r in rows]
 
 
-@router.get("/{risk_id}", response_model=RiskOut)
-def get_risk(
-    risk_id: str,
-    db: Session = Depends(get_db),
-    u: User = Depends(require_perm("risk:read")),
-):
-    r = _get_scoped_risk(db, risk_id, u)
-
-    log(
-        db,
-        "RISK_VIEW",
-        actor=u,
-        entity=None,
-        target_ref=r.id,
-        meta={"entity_id": r.entity_id},
-    )
-
-    return _risk_to_out(r)
-
-
 @router.post("/search", response_model=RiskSearchOut)
-def search_risk(
-    body: RiskSearchIn,
-    db: Session = Depends(get_db),
-    u: User = Depends(require_perm("risk:create")),
-):
+def search_risk(body: RiskSearchIn, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:create"))):
     entity_id = _resolve_entity_id(u, body.entity_id)
 
-    # Mock engine: generates candidates based on name
+    # Mock engine: candidates
     base = body.name.strip()
-    candidates: list[CandidateOut] = []
+    candidates = []
     for i in range(1, 4):
         cid = str(uuid.uuid4())
         candidates.append(
@@ -130,36 +89,26 @@ def search_risk(
             )
         )
 
-    log(
-        db,
-        "RISK_SEARCH",
-        actor=u,
-        entity=None,
-        target_ref=base,
-        meta={"entity_id": entity_id},
-    )
+    log(db, "RISK_SEARCH", actor=u, entity=None, target_ref=base, meta={"entity_id": entity_id})
 
     return RiskSearchOut(disambiguation_required=True, candidates=candidates)
 
 
 @router.post("/confirm", response_model=RiskOut)
-def confirm_risk(
-    body: RiskConfirmIn,
-    db: Session = Depends(get_db),
-    u: User = Depends(require_perm("risk:confirm")),
-):
+def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:confirm"))):
     entity_id = _resolve_entity_id(u, body.entity_id)
 
-    # Mock scoring (substituir pelo motor real)
+    # Mock scoring
     score_int = 78
     score = str(score_int)
-    summary = "Mock risk assessment completed. Replace with real engine scoring."
+    summary = "Avaliação de risco (mock). Substituir por motor real."
     matches = [
         {
+            "type": "WATCHLIST",
             "source": "OFAC",
             "match": True,
             "confidence": 0.82,
-            "note": "Name similarity match",
+            "note": "Semelhança de nome",
         }
     ]
 
@@ -177,10 +126,8 @@ def confirm_risk(
         created_by=u.id,
         created_at=datetime.utcnow(),
     )
-
     db.add(r)
     db.commit()
-    db.refresh(r)
 
     log(
         db,
@@ -193,46 +140,76 @@ def confirm_risk(
 
     return _risk_to_out(r)
 
+
 @router.get("/{risk_id}/pdf")
-def risk_pdf(
-    risk_id: str,
-    db: Session = Depends(get_db),
-    u: User = Depends(require_perm("risk:pdf:download")),
-):
+def risk_pdf(risk_id: str, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:pdf:download"))):
+    """
+    PDF institucional (Banco/Seguradora):
+    - Multi-tenant scoped
+    - QR + hash + assinatura
+    - perfil segurador (Excel) + decisão final ponderada
+    """
     r = db.get(Risk, risk_id)
     if not r:
         raise HTTPException(status_code=404, detail="Risk not found")
+
+    # blindagem multi-tenant
     if u.entity_id and r.entity_id != u.entity_id:
         raise HTTPException(status_code=404, detail="Risk not found")
 
+    # Integridade
     integrity_hash = make_integrity_hash(r)
     verify_url = f"{settings.BASE_URL}/verify/{r.id}/{integrity_hash}"
     server_signature = make_server_signature(integrity_hash)
 
-    try:
-        pdf_bytes = build_risk_pdf_institutional(
-            risk=r,
-            analyst_name=u.name,
-            generated_at=datetime.utcnow(),
-            integrity_hash=integrity_hash,
-            server_signature=server_signature,
-            verify_url=verify_url,
-        )
-    except Exception as e:
-        # guarda o erro na auditoria para não perdermos o motivo
-        log(
-            db,
-            "RISK_PDF_ERROR",
-            actor=u,
-            entity=None,
-            target_ref=r.id,
-            meta={"entity_id": r.entity_id, "error": repr(e)},
-        )
-        # devolve o erro para o browser/Postman (assim vemos a causa)
-        raise HTTPException(
-            status_code=500,
-            detail=f"PDF generation failed: {e.__class__.__name__}: {e}",
-        )
+    # 1) Perfil segurador (a partir das fontes Excel já importadas para o Postgres)
+    insurance_profile = build_insurance_profile(
+        db,
+        entity_id=r.entity_id,
+        bi=r.query_bi,
+        passport=r.query_passport,
+        full_name=r.query_name,
+    )
+
+    # 2) Matches agrupados (compliance)
+    grouped = matches_by_type(r)
+
+    # 3) Decisão final (hard-stops + ponderação)
+    compliance_score = int(r.score) if str(r.score).isdigit() else 0
+    decision = final_decision(
+        compliance_score=compliance_score,
+        grouped_matches=grouped,
+        insurance_profile=insurance_profile,
+        weights=None,  # usa DEFAULT 70/30 no engine
+    )
+
+    # 4) Anexar snapshot ao objeto (sem migrations por agora)
+    setattr(r, "insurance_profile", insurance_profile)
+    setattr(
+        r,
+        "final_decision",
+        {
+            "compliance_score": decision.compliance_score,
+            "insurance_score": decision.insurance_score,
+            "final_score": decision.final_score,
+            "decision": decision.decision,
+            "rationale": decision.rationale,
+            "premium_hint": decision.premium_hint,
+            "underwriting_actions": decision.underwriting_actions,
+            "underwriting_conditions": decision.underwriting_conditions,
+            "decision_drivers": decision.decision_drivers,
+        },
+    )
+
+    # Build PDF
+    pdf_bytes = build_risk_pdf_institutional(
+        risk=r,
+        analyst_name=u.name,
+        generated_at=datetime.utcnow(),
+        integrity_hash=integrity_hash,
+        server_signature=server_signature,
+        verify_url=verify_url,
+    )
 
     log(
         db,
