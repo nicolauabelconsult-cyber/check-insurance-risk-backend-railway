@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Any
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -13,6 +13,8 @@ from app.deps import require_perm
 from app.models import User, UserRole
 from app.audit import log
 
+# Se já tens estes models noutro ficheiro, ajusta os imports.
+# Aqui assumo que tens models de seguro já criados (insurance_payments, etc.)
 from app.insurance_models import (
     InsurancePayment,
     InsuranceClaim,
@@ -21,88 +23,90 @@ from app.insurance_models import (
     InsuranceFraudFlag,
 )
 
-router = APIRouter(prefix="/insurance", tags=["insurance"])
+router = APIRouter(prefix="/insurance", tags=["insurance-sources"])
 
 
-def _resolve_entity_id(u: User, requested: str | None) -> str:
+def _resolve_entity_id(u: User, requested: Optional[str]) -> str:
     if u.role in {UserRole.SUPER_ADMIN, UserRole.ADMIN}:
         if not requested:
-            raise HTTPException(status_code=400, detail="entity_id required for admins")
+            raise HTTPException(status_code=400, detail="entity_id required")
         return requested
     if not u.entity_id:
         raise HTTPException(status_code=400, detail="User entity_id missing")
     return u.entity_id
 
 
-# -------------------------
-# Schemas (JSON bulk)
-# -------------------------
-
 class PaymentIn(BaseModel):
-    entity_id: str | None = None
-    bi: str | None = None
-    passport: str | None = None
-    full_name: str | None = None
-    due_date: date | None = None
-    paid_date: date | None = None
-    amount: int | None = None
-    is_paid: bool = False
+    entity_id: Optional[str] = None
+    bi: Optional[str] = None
+    passport: Optional[str] = None
+    full_name: Optional[str] = None
+
+    due_date: Optional[date] = None
+    paid_date: Optional[date] = None
+    amount: Optional[int] = None
+    is_paid: Optional[bool] = False
 
 
 class ClaimIn(BaseModel):
-    entity_id: str | None = None
-    bi: str | None = None
-    passport: str | None = None
-    full_name: str | None = None
-    claim_date: date | None = None
-    claim_type: str | None = None
-    amount_paid: int | None = None
-    amount_reserved: int | None = None
-    status: str | None = None
-    note: str | None = None
+    entity_id: Optional[str] = None
+    bi: Optional[str] = None
+    passport: Optional[str] = None
+    full_name: Optional[str] = None
+
+    claim_date: Optional[date] = None
+    claim_type: Optional[str] = None
+    amount_paid: Optional[int] = None
+    amount_reserved: Optional[int] = None
+    status: Optional[str] = None
+    note: Optional[str] = None
 
 
 class PolicyIn(BaseModel):
-    entity_id: str | None = None
-    bi: str | None = None
-    passport: str | None = None
-    full_name: str | None = None
+    entity_id: Optional[str] = None
+    bi: Optional[str] = None
+    passport: Optional[str] = None
+    full_name: Optional[str] = None
+
     policy_no: str
-    product_type: str | None = None
-    status: str | None = "ACTIVE"
-    start_date: date | None = None
-    end_date: date | None = None
-    premium: int | None = None
-    sum_insured: int | None = None
+    product_type: Optional[str] = None
+    status: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
+    premium: Optional[int] = None
+    sum_insured: Optional[int] = None
 
 
 class CancellationIn(BaseModel):
-    entity_id: str | None = None
-    bi: str | None = None
-    passport: str | None = None
-    full_name: str | None = None
-    policy_no: str | None = None
-    date: date | None = None
-    reason: str | None = None
+    entity_id: Optional[str] = None
+    bi: Optional[str] = None
+    passport: Optional[str] = None
+    full_name: Optional[str] = None
+
+    policy_no: Optional[str] = None
+    date: Optional[date] = None
+    reason: Optional[str] = None
 
 
 class FraudFlagIn(BaseModel):
-    entity_id: str | None = None
-    bi: str | None = None
-    passport: str | None = None
-    full_name: str | None = None
+    entity_id: Optional[str] = None
+    bi: Optional[str] = None
+    passport: Optional[str] = None
+    full_name: Optional[str] = None
+
     flag: str
-    severity: str | None = None
-    note: str | None = None
-    date: date | None = None
+    severity: Optional[str] = None
+    note: Optional[str] = None
+    date: Optional[date] = None
 
-
-# -------------------------
-# Bulk endpoints
-# -------------------------
 
 @router.post("/payments/bulk")
-def upload_payments(items: list[PaymentIn], db: Session = Depends(get_db), u: User = Depends(require_perm("insurance:upload"))):
+def upload_payments_bulk(
+    items: List[PaymentIn],
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("insurance:upload")),
+):
     inserted = 0
     for it in items:
         entity_id = _resolve_entity_id(u, it.entity_id)
@@ -115,18 +119,21 @@ def upload_payments(items: list[PaymentIn], db: Session = Depends(get_db), u: Us
             due_date=it.due_date,
             paid_date=it.paid_date,
             amount=it.amount,
-            is_paid=it.is_paid,
+            is_paid=bool(it.is_paid),
         )
         db.add(row)
         inserted += 1
-
     db.commit()
     log(db, "INSURANCE_PAYMENTS_UPLOAD", actor=u, entity=None, target_ref=str(inserted), meta={"rows": inserted})
     return {"inserted": inserted}
 
 
 @router.post("/claims/bulk")
-def upload_claims(items: list[ClaimIn], db: Session = Depends(get_db), u: User = Depends(require_perm("insurance:upload"))):
+def upload_claims_bulk(
+    items: List[ClaimIn],
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("insurance:upload")),
+):
     inserted = 0
     for it in items:
         entity_id = _resolve_entity_id(u, it.entity_id)
@@ -145,14 +152,17 @@ def upload_claims(items: list[ClaimIn], db: Session = Depends(get_db), u: User =
         )
         db.add(row)
         inserted += 1
-
     db.commit()
     log(db, "INSURANCE_CLAIMS_UPLOAD", actor=u, entity=None, target_ref=str(inserted), meta={"rows": inserted})
     return {"inserted": inserted}
 
 
 @router.post("/policies/bulk")
-def upload_policies(items: list[PolicyIn], db: Session = Depends(get_db), u: User = Depends(require_perm("insurance:upload"))):
+def upload_policies_bulk(
+    items: List[PolicyIn],
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("insurance:upload")),
+):
     inserted = 0
     for it in items:
         entity_id = _resolve_entity_id(u, it.entity_id)
@@ -172,14 +182,17 @@ def upload_policies(items: list[PolicyIn], db: Session = Depends(get_db), u: Use
         )
         db.add(row)
         inserted += 1
-
     db.commit()
     log(db, "INSURANCE_POLICIES_UPLOAD", actor=u, entity=None, target_ref=str(inserted), meta={"rows": inserted})
     return {"inserted": inserted}
 
 
 @router.post("/cancellations/bulk")
-def upload_cancellations(items: list[CancellationIn], db: Session = Depends(get_db), u: User = Depends(require_perm("insurance:upload"))):
+def upload_cancellations_bulk(
+    items: List[CancellationIn],
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("insurance:upload")),
+):
     inserted = 0
     for it in items:
         entity_id = _resolve_entity_id(u, it.entity_id)
@@ -195,14 +208,17 @@ def upload_cancellations(items: list[CancellationIn], db: Session = Depends(get_
         )
         db.add(row)
         inserted += 1
-
     db.commit()
     log(db, "INSURANCE_CANCELLATIONS_UPLOAD", actor=u, entity=None, target_ref=str(inserted), meta={"rows": inserted})
     return {"inserted": inserted}
 
 
-@router.post("/fraud/bulk")
-def upload_fraud(items: list[FraudFlagIn], db: Session = Depends(get_db), u: User = Depends(require_perm("insurance:upload"))):
+@router.post("/fraud-flags/bulk")
+def upload_fraud_flags_bulk(
+    items: List[FraudFlagIn],
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("insurance:upload")),
+):
     inserted = 0
     for it in items:
         entity_id = _resolve_entity_id(u, it.entity_id)
@@ -219,7 +235,6 @@ def upload_fraud(items: list[FraudFlagIn], db: Session = Depends(get_db), u: Use
         )
         db.add(row)
         inserted += 1
-
     db.commit()
-    log(db, "INSURANCE_FRAUD_UPLOAD", actor=u, entity=None, target_ref=str(inserted), meta={"rows": inserted})
+    log(db, "INSURANCE_FRAUD_FLAGS_UPLOAD", actor=u, entity=None, target_ref=str(inserted), meta={"rows": inserted})
     return {"inserted": inserted}
