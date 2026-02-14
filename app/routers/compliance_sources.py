@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Optional, List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -28,11 +28,12 @@ def _resolve_entity_id(u: User, requested: Optional[str]) -> str:
 
 
 class PepRecordIn(BaseModel):
+    # admins podem inserir por entidade; client ignora requested
     entity_id: Optional[str] = None
 
-    full_name: str
-    aka: Optional[str] = None
+    full_name: str = Field(..., min_length=2)
 
+    aka: Optional[str] = None
     bi: Optional[str] = None
     passport: Optional[str] = None
     dob: Optional[date] = None
@@ -57,24 +58,30 @@ def upload_pep_bulk(
     u: User = Depends(require_perm("compliance:upload")),
 ):
     inserted = 0
+
     for it in items:
         entity_id = _resolve_entity_id(u, it.entity_id)
+
         row = PepRecord(
             id=str(uuid.uuid4()),
             entity_id=entity_id,
+
             full_name=it.full_name.strip(),
             aka=it.aka,
+
             bi=it.bi,
             passport=it.passport,
             dob=it.dob,
             nationality=it.nationality,
+
             pep_category=it.pep_category,
             pep_role=it.pep_role,
             country=it.country,
             start_date=it.start_date,
             end_date=it.end_date,
             risk_level=(it.risk_level.upper() if it.risk_level else None),
-            source_name=it.source_name or "PEP_INTERNAL",
+
+            source_name=(it.source_name or "PEP_INTERNAL"),
             source_ref=it.source_ref,
             note=it.note,
         )
