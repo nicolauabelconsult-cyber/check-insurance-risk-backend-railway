@@ -36,9 +36,9 @@ def make_server_signature(integrity_hash: str) -> str:
 
 
 # ============================================================
-# Helpers
+# Helpers (exported)
 # ============================================================
-def _safe(v: Any, max_len: int = 220) -> str:
+def _safe(v: Any, max_len: int = 240) -> str:
     s = "" if v is None else str(v)
     s = s.replace("\n", " ").strip()
     return s[:max_len]
@@ -52,9 +52,6 @@ def _score_to_int(score: Any) -> int:
 
 
 def _score_band(score: Any) -> Tuple[str, str]:
-    """
-    Returns (band, default_review_level).
-    """
     s = _score_to_int(score)
     if s >= 80:
         return ("ALTO", "EDD (Enhanced Due Diligence)")
@@ -72,10 +69,6 @@ def _normalize_matches_generic(matches: Any) -> Dict[str, Dict[str, List[dict]]]
       "WATCHLIST": {...},
       "ADVERSE_MEDIA": {...}
     }
-
-    Aceita variações:
-    - category/type/list_type
-    - source/source_system/provider/sources[0]
     """
     out: Dict[str, Dict[str, List[dict]]] = {"PEP": {}, "SANCTIONS": {}, "WATCHLIST": {}, "ADVERSE_MEDIA": {}}
 
@@ -116,34 +109,55 @@ def _counts_from_compliance(comp: Dict[str, Dict[str, List[dict]]]) -> Tuple[int
 
 
 def _decision_policy(score: Any, pep_hits: int, sanc_hits: int, fraud_flags: int) -> Tuple[str, List[str]]:
-    """
-    Decisão recomendada com linguagem institucional.
-    """
-    band, _review = _score_band(score)
+    band, review_level = _score_band(score)
     reasons: List[str] = []
 
     if sanc_hits > 0:
         decision = "SUSPENDER / ESCALAR"
-        reasons.append("Identificadas correspondências em listas de sanções. Requer validação imediata e escalonamento.")
+        reasons.append("Foram identificadas correspondências em listas de sanções. Requer validação imediata e escalonamento.")
     elif pep_hits > 0:
         decision = "EDD (Revisão Reforçada)"
-        reasons.append("Identificadas correspondências PEP. Recomenda-se diligência reforçada e validação documental.")
+        reasons.append("Foram identificadas correspondências PEP. Recomenda-se diligência reforçada e validação documental.")
     elif fraud_flags > 0:
         decision = "Revisão Reforçada"
-        reasons.append("Identificados indicadores operacionais/risco (fraud flags). Recomenda-se revisão reforçada.")
+        reasons.append("Foram identificados indicadores de risco operacional/fraude (fraud flags). Recomenda-se revisão reforçada.")
     else:
         decision = "Revisão Padrão"
-        reasons.append("Com os dados disponíveis, não foram identificadas correspondências críticas.")
+        reasons.append("Com base nas fontes configuradas e dados disponíveis, não foram identificadas correspondências críticas.")
 
-    # razões padrão institucionais
-    reasons.append(f"Nível de risco (score): {band}.")
+    reasons.append(f"Nível de risco (score): {band}. Nível de revisão sugerido: {review_level}.")
     reasons.append("Resultados dependem da completude dos dados fornecidos e das fontes ativas/configuradas.")
     reasons.append("Correspondências aproximadas devem ser confirmadas por validação humana antes de decisão final.")
     return decision, reasons[:5]
 
 
+def _institutional_summary(
+    score: Any,
+    pep: int,
+    sanc: int,
+    watch: int,
+    adv: int,
+) -> str:
+    band, review = _score_band(score)
+    s = _score_to_int(score)
+    lines = []
+    lines.append(f"Com base na análise executada nas fontes configuradas, o risco global foi classificado como {band} (score {s}).")
+    if sanc > 0:
+        lines.append("Foram identificadas correspondências em listas de sanções, exigindo validação imediata e escalonamento.")
+    elif pep > 0:
+        lines.append("Foram identificadas correspondências PEP, recomendando-se diligência reforçada (EDD) e validação documental.")
+    else:
+        lines.append("Não foram identificadas correspondências críticas em sanções/PEP com os dados disponíveis.")
+    if watch > 0:
+        lines.append("Foram observadas correspondências em watchlists, recomendando-se verificação contextual.")
+    if adv > 0:
+        lines.append("Foram observadas referências em adverse media, recomendando-se avaliação qualitativa do contexto.")
+    lines.append("A decisão final deve ser tomada em conformidade com políticas internas e requisitos regulatórios aplicáveis.")
+    return " ".join(lines)
+
+
 # ============================================================
-# PDF Builder (Institutional / Bank-level)
+# PDF Builder (Institutional / Adaptive)
 # ============================================================
 def build_risk_pdf_institutional(
     risk: Any,
@@ -155,16 +169,13 @@ def build_risk_pdf_institutional(
     underwriting_by_product: Optional[Dict[str, Any]] = None,
     compliance_by_category: Optional[Dict[str, Any]] = None,
     report_title: str = "Relatório Institucional de Risco",
-    report_version: str = "v1.0",
+    report_version: str = "v1.1",
 ) -> bytes:
     """
-    Padrão institucional:
-    - Capa + Sumário Executivo (decisão, score, razões)
-    - Identificação e Escopo
-    - Compliance (por categoria e por fonte, com detalhes)
-    - Underwriting (por tipo de seguro / product_type)
-    - Metodologia e Limitações
-    - Integridade e Verificação (hash, assinatura, URL, QR)
+    PDF institucional adaptativo:
+    - Sem páginas vazias
+    - Secções só aparecem se houver conteúdo
+    - Cresce para 5–7+ páginas quando houver evidências
     """
     from io import BytesIO
 
@@ -189,15 +200,14 @@ def build_risk_pdf_institutional(
     except Exception:
         qrcode = None  # type: ignore
 
-    # UTC stamp
     if generated_at.tzinfo is None:
         generated_at = generated_at.replace(tzinfo=timezone.utc)
 
     # Styles
     styles = getSampleStyleSheet()
-    H1 = ParagraphStyle("H1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=16, spaceAfter=10)
-    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, spaceAfter=6)
-    H3 = ParagraphStyle("H3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=10, spaceAfter=4)
+    H1 = ParagraphStyle("H1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=16, spaceAfter=8)
+    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, spaceAfter=5)
+    H3 = ParagraphStyle("H3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=10, spaceAfter=3)
     BODY = ParagraphStyle("BODY", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12)
     SMALL = ParagraphStyle("SMALL", parent=styles["BodyText"], fontName="Helvetica", fontSize=8, leading=10, textColor=colors.grey)
 
@@ -212,16 +222,16 @@ def build_risk_pdf_institutional(
         canvas.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Página {doc.page}")
         canvas.restoreState()
 
-    def tbl(data: List[List[str]], col_widths=None) -> Table:
+    def tbl(data: List[List[str]], col_widths=None, header_bg=BRAND) -> Table:
         t = Table(data, colWidths=col_widths, hAlign="LEFT")
         t.setStyle(
             TableStyle(
                 [
-                    ("BACKGROUND", (0, 0), (-1, 0), BRAND),
+                    ("BACKGROUND", (0, 0), (-1, 0), header_bg),
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                     ("FONTSIZE", (0, 0), (-1, 0), 9),
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 7),
                     ("GRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
                     ("FONTSIZE", (0, 1), (-1, -1), 8),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -232,7 +242,7 @@ def build_risk_pdf_institutional(
         return t
 
     def tag(text: str) -> Table:
-        t = Table([[Paragraph(f"<b>{_safe(text, 140)}</b>", ParagraphStyle("TAG", parent=BODY, textColor=colors.white))]])
+        t = Table([[Paragraph(f"<b>{_safe(text, 180)}</b>", ParagraphStyle("TAG", parent=BODY, textColor=colors.white))]])
         t.setStyle(
             TableStyle(
                 [
@@ -263,8 +273,8 @@ def build_risk_pdf_institutional(
         fraud_flags_count = 0
 
     decision, reasons = _decision_policy(score, pep_count, sanc_count, fraud_flags_count)
+    exec_summary = _institutional_summary(score, pep_count, sanc_count, watch_count, adv_count)
 
-    # Build doc
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf,
@@ -280,13 +290,13 @@ def build_risk_pdf_institutional(
     story: List[Any] = []
 
     # ============================================================
-    # CAPA + SUMÁRIO EXECUTIVO
+    # CAPA + SUMÁRIO EXECUTIVO (sempre)
     # ============================================================
     story.append(Paragraph("CHECK INSURANCE RISK", H1))
     story.append(Paragraph(report_title, H2))
-    story.append(Spacer(1, 6))
+    story.append(Spacer(1, 4))
     story.append(tag(f"DECISÃO RECOMENDADA: {decision}"))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
     meta = [
         ["Campo", "Valor"],
@@ -297,7 +307,7 @@ def build_risk_pdf_institutional(
         ["Referência (Risk ID)", _safe(getattr(risk, "id", ""), 80)],
     ]
     story.append(tbl(meta, col_widths=[55 * mm, 110 * mm]))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
 
     story.append(Paragraph("Declaração de confidencialidade", H3))
     story.append(
@@ -307,34 +317,34 @@ def build_risk_pdf_institutional(
             BODY,
         )
     )
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
 
     story.append(Paragraph("Sumário executivo", H2))
     story.append(
         tbl(
             [
-                ["Score", "Nível", "Nível de Revisão", "PEP", "Sanções", "Watchlists"],
-                [str(score_i) if score else "N/A", band, review_level, str(pep_count), str(sanc_count), str(watch_count)],
+                ["Score", "Nível", "Nível de Revisão", "PEP", "Sanções", "Watchlists", "Adverse Media"],
+                [str(score_i) if score else "N/A", band, review_level, str(pep_count), str(sanc_count), str(watch_count), str(adv_count)],
             ],
-            col_widths=[18 * mm, 22 * mm, 50 * mm, 20 * mm, 25 * mm, 30 * mm],
+            col_widths=[16 * mm, 18 * mm, 45 * mm, 16 * mm, 20 * mm, 24 * mm, 25 * mm],
         )
     )
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(f"<b>Resumo institucional:</b> {exec_summary}", BODY))
+    story.append(Spacer(1, 6))
 
     story.append(Paragraph("<b>Razões principais (Top 5)</b>", BODY))
     rr = [["#", "Razão"]]
-    for i, r in enumerate(reasons, 1):
-        rr.append([str(i), _safe(r, 240)])
+    for i, r_ in enumerate(reasons, 1):
+        rr.append([str(i), _safe(r_, 260)])
     story.append(tbl(rr, col_widths=[10 * mm, 155 * mm]))
-
-    summary = _safe(getattr(risk, "summary", ""), 420)
     story.append(Spacer(1, 8))
-    story.append(Paragraph(f"<b>Resumo:</b> {summary if summary else 'Sem resumo registado.'}", BODY))
 
+    # Só quebra página aqui se houver conteúdo suficiente depois
     story.append(PageBreak())
 
     # ============================================================
-    # 1) IDENTIFICAÇÃO & ESCOPO
+    # 1) IDENTIFICAÇÃO & ESCOPO (sempre)
     # ============================================================
     story.append(Paragraph("1) Identificação e Escopo", H1))
 
@@ -347,8 +357,7 @@ def build_risk_pdf_institutional(
         ["Estado do registo", _safe(getattr(risk, "status", ""), 40)],
     ]
     story.append(tbl(ident, col_widths=[55 * mm, 110 * mm]))
-    story.append(Spacer(1, 8))
-
+    story.append(Spacer(1, 6))
     story.append(Paragraph("Escopo da avaliação", H3))
     story.append(
         Paragraph(
@@ -358,10 +367,10 @@ def build_risk_pdf_institutional(
             BODY,
         )
     )
-    story.append(PageBreak())
+    story.append(Spacer(1, 8))
 
     # ============================================================
-    # 2) COMPLIANCE (por categoria e fonte)
+    # 2) COMPLIANCE (só se houver algo relevante OU para declarar ausência em 1 bloco compacto)
     # ============================================================
     story.append(Paragraph("2) Compliance", H1))
     story.append(
@@ -371,14 +380,16 @@ def build_risk_pdf_institutional(
             BODY,
         )
     )
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
-    def render_category(title: str, by_source: Dict[str, List[dict]]):
-        story.append(Paragraph(title, H2))
+    def _render_category_compact(title: str, by_source: Dict[str, List[dict]]) -> List[Any]:
+        block: List[Any] = []
+        block.append(Paragraph(title, H2))
+
         if not by_source:
-            story.append(Paragraph("Sem correspondências registadas para esta categoria.", BODY))
-            story.append(Spacer(1, 6))
-            return
+            block.append(Paragraph("Sem correspondências registadas para esta categoria.", BODY))
+            block.append(Spacer(1, 4))
+            return block
 
         # Resumo por fonte
         rows = [["Fonte", "Qtd. registos", "Top score"]]
@@ -390,13 +401,13 @@ def build_risk_pdf_institutional(
                 except Exception:
                     pass
             rows.append([_safe(src, 60), str(len(hits or [])), str(top)])
-        story.append(tbl(rows, col_widths=[90 * mm, 35 * mm, 40 * mm]))
-        story.append(Spacer(1, 6))
+        block.append(tbl(rows, col_widths=[90 * mm, 35 * mm, 40 * mm]))
+        block.append(Spacer(1, 5))
 
-        # Detalhes (Top 5 por fonte)
+        # Detalhes: até 8 por fonte (para tornar "institucional completo" quando houver dados)
         for src, hits in (by_source or {}).items():
-            story.append(Paragraph(f"Fonte: <b>{_safe(src, 80)}</b>", H3))
-            hs = sorted((hits or []), key=lambda x: int(x.get("match_score", 0) or 0), reverse=True)[:5]
+            block.append(Paragraph(f"Fonte: <b>{_safe(src, 80)}</b>", H3))
+            hs = sorted((hits or []), key=lambda x: int(x.get("match_score", 0) or 0), reverse=True)[:8]
             d = [["Nome", "Score", "País/Nac.", "DOB", "Cargo/Função/Nota", "Ref/Doc"]]
             for h in hs:
                 d.append(
@@ -405,41 +416,39 @@ def build_risk_pdf_institutional(
                         _safe(h.get("match_score") or h.get("score"), 6),
                         _safe(h.get("nationality") or h.get("country"), 14),
                         _safe(h.get("dob") or h.get("date_of_birth"), 10),
-                        _safe(h.get("role") or h.get("position") or h.get("notes") or h.get("summary"), 36),
+                        _safe(h.get("role") or h.get("position") or h.get("notes") or h.get("summary"), 40),
                         _safe(h.get("id_number") or h.get("source_ref") or h.get("reference"), 18),
                     ]
                 )
-            story.append(tbl(d))
-            story.append(Spacer(1, 8))
+            block.append(tbl(d))
+            block.append(Spacer(1, 6))
 
-    render_category("2.1 PEP", comp.get("PEP") or {})
-    render_category("2.2 Sanções", comp.get("SANCTIONS") or {})
-    render_category("2.3 Watchlists", comp.get("WATCHLIST") or {})
+        return block
+
+    # Compliance categories (sempre renderizadas, mas compactas e sem criar páginas vazias)
+    story.extend(_render_category_compact("2.1 PEP", comp.get("PEP") or {}))
+    story.extend(_render_category_compact("2.2 Sanções", comp.get("SANCTIONS") or {}))
+    story.extend(_render_category_compact("2.3 Watchlists", comp.get("WATCHLIST") or {}))
     if (comp.get("ADVERSE_MEDIA") or {}):
-        render_category("2.4 Adverse Media", comp.get("ADVERSE_MEDIA") or {})
+        story.extend(_render_category_compact("2.4 Adverse Media", comp.get("ADVERSE_MEDIA") or {}))
 
-    story.append(PageBreak())
+    # Só quebra se underwriting tiver conteúdo suficiente para justificar
+    if uw:
+        story.append(PageBreak())
 
     # ============================================================
-    # 3) UNDERWRITING (por product_type)
+    # 3) UNDERWRITING (só se houver dados; senão não cria página)
     # ============================================================
-    story.append(Paragraph("3) Underwriting", H1))
-    story.append(Paragraph("Histórico por tipo de seguro (product_type).", BODY))
-    story.append(Spacer(1, 8))
-
-    if not uw:
-        story.append(
-            Paragraph(
-                "Sem dados de underwriting agregados neste relatório (policies/claims/payments/cancellations/fraud flags).",
-                BODY,
-            )
-        )
+    if uw:
+        story.append(Paragraph("3) Underwriting", H1))
+        story.append(Paragraph("Histórico por tipo de seguro (product_type).", BODY))
         story.append(Spacer(1, 6))
-    else:
+
         for product_type in sorted(uw.keys(), key=lambda x: str(x)):
             pack = uw.get(product_type) or {}
             block: List[Any] = []
             block.append(Paragraph(f"Tipo de seguro: <b>{_safe(product_type, 40) or 'N/A'}</b>", H2))
+
             block.append(
                 tbl(
                     [
@@ -455,16 +464,18 @@ def build_risk_pdf_institutional(
                     col_widths=[33 * mm] * 5,
                 )
             )
-            block.append(Spacer(1, 4))
+
+            # Nota curta (sem ocupar página)
+            block.append(Spacer(1, 3))
             block.append(Paragraph("Nota: amostra (Top 10) por categoria para manter concisão.", SMALL))
+
             story.append(KeepTogether(block))
-            story.append(Spacer(1, 8))
+            story.append(Spacer(1, 6))
 
+    # ============================================================
+    # 4) METODOLOGIA & LIMITAÇÕES (sempre, mas compacta)
+    # ============================================================
     story.append(PageBreak())
-
-    # ============================================================
-    # 4) METODOLOGIA & LIMITAÇÕES
-    # ============================================================
     story.append(Paragraph("4) Metodologia e Limitações", H1))
 
     story.append(Paragraph("Metodologia (alto nível)", H2))
@@ -476,7 +487,7 @@ def build_risk_pdf_institutional(
             BODY,
         )
     )
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
     story.append(Paragraph("Limitações", H2))
     limits = [
@@ -487,24 +498,22 @@ def build_risk_pdf_institutional(
     ]
     lt = [["#", "Ponto"]]
     for i, t in enumerate(limits, 1):
-        lt.append([str(i), _safe(t, 240)])
+        lt.append([str(i), _safe(t, 260)])
     story.append(tbl(lt, col_widths=[10 * mm, 155 * mm]))
 
-    story.append(PageBreak())
-
     # ============================================================
-    # 5) INTEGRIDADE & VERIFICAÇÃO
+    # 5) INTEGRIDADE & VERIFICAÇÃO (sempre)
     # ============================================================
-    story.append(Paragraph("5) Integridade e Verificação", H1))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("5) Integridade e Verificação", H2))
     story.append(Paragraph(f"<b>Hash:</b> {_safe(integrity_hash, 200)}", BODY))
     story.append(Paragraph(f"<b>Assinatura do servidor:</b> {_safe(server_signature, 200)}", BODY))
     story.append(Paragraph(f"<b>URL de verificação:</b> {_safe(verify_url, 260)}", BODY))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
 
     if qrcode is not None:
         try:
             from io import BytesIO as _BIO
-
             qr_img = qrcode.make(verify_url)
             qbuf = _BIO()
             qr_img.save(qbuf, format="PNG")
@@ -521,6 +530,5 @@ def build_risk_pdf_institutional(
     return buf.getvalue()
 
 
-# Compatibilidade (se algum canto ainda chamar _pt)
 def build_risk_pdf_institutional_pt(*args, **kwargs) -> bytes:
     return build_risk_pdf_institutional(*args, **kwargs)
