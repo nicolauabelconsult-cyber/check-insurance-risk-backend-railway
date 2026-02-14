@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
+from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.settings import settings
-from app.db import get_db
-from app.models import Risk
-from app.pdfs import make_integrity_hash, make_server_signature
 
+# Routers (mantém explícito; evita imports circulares)
 from app.routers.auth import router as auth_router
 from app.routers.entities import router as entities_router
 from app.routers.users import router as users_router
@@ -16,74 +15,66 @@ from app.routers.sources import router as sources_router
 from app.routers.risks import router as risks_router
 from app.routers.audit import router as audit_router
 from app.routers.public import router as public_router
+
+# Novo: diagnostics
 from app.routers.diagnostics import router as diagnostics_router
 
 
-def _parse_origins(value: str | None) -> list[str]:
+def _parse_csv(value: str | None) -> list[str]:
     if not value:
-        return ["*"]
-    parts = [x.strip() for x in value.split(",") if x.strip()]
-    return parts or ["*"]
+        return []
+    return [x.strip() for x in value.split(",") if x.strip()]
 
 
-app = FastAPI(
-    title=getattr(settings, "APP_NAME", "Check Insurance Risk API"),
-    version=getattr(settings, "APP_VERSION", "v1.0"),
-)
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title=getattr(settings, "APP_NAME", "Check Insurance Risk API"),
+        version=getattr(settings, "APP_VERSION", "1.0.0"),
+    )
 
-origins = _parse_origins(getattr(settings, "CORS_ORIGINS", None))
+    # ---------- Middleware (produção-friendly) ----------
+    # GZip para responses grandes (PDF/JSON)
+    app.add_middleware(GZipMiddleware, minimum_size=1200)
 
-app.include_router(diagnostics_router)
+    # Trusted hosts (se não definires, deixa permissivo)
+    allowed_hosts = _parse_csv(getattr(settings, "ALLOWED_HOSTS", None))
+    if allowed_hosts:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
-)
+    # CORS (puxa de env se existir; senão abre tudo por enquanto)
+    cors_origins = _parse_csv(getattr(settings, "CORS_ORIGINS", None))
+    if not cors_origins:
+        cors_origins = ["*"]
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # ---------- Endpoints base ----------
+    @app.get("/", include_in_schema=False)
+    def root():
+        return {"name": app.title, "status": "ok"}
+
+    @app.get("/health", include_in_schema=False)
+    def health():
+        return {"status": "ok"}
+
+    # ---------- Routers ----------
+    # Nota: aqui o app já existe, então nunca mais tens NameError
+    app.include_router(auth_router)
+    app.include_router(entities_router)
+    app.include_router(users_router)
+    app.include_router(sources_router)
+    app.include_router(risks_router)
+    app.include_router(audit_router)
+    app.include_router(public_router)
+    app.include_router(diagnostics_router)
+
+    return app
 
 
-@app.get("/health")
-def health():
-    return {"service": "Check Insurance Risk API", "status": "ok"}
-
-
-@app.get("/verify/{risk_id}/{hash_value}", response_model=None)
-def verify_document(risk_id: str, hash_value: str, db: Session = Depends(get_db)):
-    r = db.get(Risk, risk_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Risk not found")
-
-    expected = make_integrity_hash(r)
-    valid = expected == hash_value
-    signature = make_server_signature(expected)
-
-    return {
-        "risk_id": risk_id,
-        "provided_hash": hash_value,
-        "expected_hash": expected,
-        "valid": valid,
-        "server_signature": signature,
-    }
-
-
-import os
-
-@app.get("/_meta")
-def meta():
-    return {
-        "commit": os.getenv("RENDER_GIT_COMMIT"),
-        "service": os.getenv("RENDER_SERVICE_NAME"),
-        "pdf_fix": "2026-02-14-pt-alias-removed",
-    }
-
-# Routers
-app.include_router(auth_router)
-app.include_router(entities_router)
-app.include_router(users_router)
-app.include_router(sources_router)
-app.include_router(risks_router)
-app.include_router(audit_router)
-app.include_router(public_router)
+app = create_app()
