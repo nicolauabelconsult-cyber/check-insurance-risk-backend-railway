@@ -1,186 +1,168 @@
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
-from io import BytesIO
+import hashlib
+import hmac
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-
-from app.audit import log
-from app.db import get_db
-from app.deps import require_perm
-from app.models import Risk, RiskStatus, User, UserRole
-from app.pdfs import build_risk_pdf_institutional, make_integrity_hash, make_server_signature
-from app.schemas import CandidateOut, RiskConfirmIn, RiskOut, RiskSearchIn, RiskSearchOut
 from app.settings import settings
 
-router = APIRouter(prefix="/risks", tags=["risks"])
+# Imports leves aqui.
+# Evita importar routers ou "main" neste módulo para não criar ciclos.
 
 
-# -------------------------
-# Multi-tenant utilities
-# -------------------------
-def _resolve_entity_id(u: User, requested: str | None) -> str:
-    if u.role in {UserRole.SUPER_ADMIN, UserRole.ADMIN}:
-        if not requested:
-            raise HTTPException(status_code=400, detail="entity_id required for admins")
-        return requested
-    if not u.entity_id:
-        raise HTTPException(status_code=400, detail="User entity_id missing")
-    return u.entity_id
+def make_integrity_hash(risk: Any) -> str:
+    """
+    Gera um hash determinístico a partir dos campos principais do Risk.
+    Usa SHA256. Não depende de DB nem de routers.
+    """
+    payload = "|".join(
+        [
+            str(getattr(risk, "id", "") or ""),
+            str(getattr(risk, "entity_id", "") or ""),
+            str(getattr(risk, "query_name", "") or ""),
+            str(getattr(risk, "query_bi", "") or ""),
+            str(getattr(risk, "query_passport", "") or ""),
+            str(getattr(risk, "query_nationality", "") or ""),
+            str(getattr(risk, "score", "") or ""),
+            str(getattr(risk, "status", "") or ""),
+            str(getattr(risk, "created_at", "") or ""),
+        ]
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
-def _guard_risk_scope(u: User, r: Risk):
-    if u.entity_id and r.entity_id != u.entity_id:
-        raise HTTPException(status_code=404, detail="Risk not found")
+def make_server_signature(integrity_hash: str) -> str:
+    """
+    Assinatura simplificada do servidor (HMAC-SHA256) para validação externa.
+    Requer PDF_SIGNING_SECRET em settings (ou usa JWT_SECRET como fallback).
+    """
+    secret = getattr(settings, "PDF_SIGNING_SECRET", None) or getattr(settings, "JWT_SECRET", "")
+    if not secret:
+        # Falha explícita ajuda a diagnosticar envs mal configurados
+        raise RuntimeError("Missing PDF_SIGNING_SECRET/JWT_SECRET in settings")
+    sig = hmac.new(secret.encode("utf-8"), integrity_hash.encode("utf-8"), hashlib.sha256).hexdigest()
+    return sig
 
 
-def _risk_to_out(r: Risk) -> RiskOut:
-    return RiskOut(
-        id=r.id,
-        entity_id=r.entity_id,
-        name=r.query_name,
-        bi=r.query_bi,
-        passport=r.query_passport,
-        nationality=r.query_nationality,
-        score=r.score,
-        summary=r.summary,
-        matches=r.matches or [],
-        status=getattr(r.status, "value", str(r.status)),
-    )
+def build_risk_pdf_institutional(
+    risk: Any,
+    analyst_name: str,
+    generated_at: datetime,
+    integrity_hash: str,
+    server_signature: str,
+    verify_url: str,
+) -> bytes:
+    """
+    PDF institucional (PT) "bank-level".
+    Mantém dependências encapsuladas: reportlab só é importado dentro da função
+    para reduzir risco de crash no boot e evitar ciclos.
+    """
+    # Import local para reduzir risco no startup
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
 
-
-# -------------------------
-# Endpoints
-# -------------------------
-@router.get("", response_model=list[RiskOut])
-def list_risks(db: Session = Depends(get_db), u: User = Depends(require_perm("risk:read"))):
-    q = db.query(Risk)
-    if u.entity_id:
-        q = q.filter(Risk.entity_id == u.entity_id)
-    rows = q.order_by(Risk.created_at.desc()).limit(200).all()
-    return [_risk_to_out(r) for r in rows]
-
-
-@router.get("/{risk_id}", response_model=RiskOut)
-def get_risk(risk_id: str, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:read"))):
-    r = db.get(Risk, risk_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Risk not found")
-    _guard_risk_scope(u, r)
-    return _risk_to_out(r)
-
-
-@router.post("/search", response_model=RiskSearchOut)
-def search_risk(body: RiskSearchIn, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:create"))):
-    entity_id = _resolve_entity_id(u, body.entity_id)
-
-    base = (body.name or "").strip()
-    if not base:
-        raise HTTPException(status_code=400, detail="name is required")
-
-    candidates: list[CandidateOut] = []
-    for i in range(1, 4):
-        cid = str(uuid.uuid4())
-        candidates.append(
-            CandidateOut(
-                id=cid,
-                full_name=f"{base} {i}",
-                nationality=body.nationality,
-                dob=None,
-                doc_type=None,
-                doc_last4=None,
-                sources=["PEP (interno)", "Sanções (interno)", "Watchlists (interno)"],
-                match_score=90 - (i * 7),
-            )
-        )
-
-    log(db, "RISK_SEARCH", actor=u, entity=None, target_ref=base, meta={"entity_id": entity_id})
-    return RiskSearchOut(disambiguation_required=True, candidates=candidates)
-
-
-@router.post("/confirm", response_model=RiskOut)
-def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:confirm"))):
-    entity_id = _resolve_entity_id(u, body.entity_id)
-
-    pep_hits = []
+    # Se tiveres qrcode, tenta usar; se não, segue sem QR.
     try:
-        from app.services.compliance_matching import pep_match  # criado na fase PEP
-        pep_hits = pep_match(
-            db=db,
-            entity_id=entity_id,
-            full_name=body.name,
-            bi=body.id_number if body.id_type == "BI" else None,
-            passport=body.id_number if body.id_type == "PASSPORT" else None,
-        )
+        import qrcode  # type: ignore
     except Exception:
-        pep_hits = []
+        qrcode = None  # type: ignore
 
-    base_score = 85 if pep_hits else 50
-    score_int = int(base_score)
-    score = str(score_int)
+    from io import BytesIO
 
-    summary = "Avaliação preliminar (motor em evolução)."
-    if pep_hits:
-        summary = "Foram identificadas correspondências PEP (motor interno). Recomenda-se revisão reforçada."
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
 
-    r = Risk(
-        id=str(uuid.uuid4()),
-        entity_id=entity_id,
-        query_name=body.name,
-        query_nationality=body.nationality,
-        query_bi=body.id_number if body.id_type == "BI" else None,
-        query_passport=body.id_number if body.id_type == "PASSPORT" else None,
-        score=score,
-        summary=summary,
-        matches=pep_hits,
-        status=RiskStatus.DONE,
-        created_by=u.id,
-        created_at=datetime.utcnow(),
-    )
-    db.add(r)
-    db.commit()
+    # Header
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(20 * mm, height - 20 * mm, "CHECK INSURANCE RISK")
+    c.setFont("Helvetica", 10)
+    c.drawString(20 * mm, height - 27 * mm, "Relatório Institucional de Risco (versão institucional)")
 
-    log(db, "RISK_CONFIRM", actor=u, entity=None, target_ref=r.id, meta={"entity_id": entity_id, "score": score_int})
-    return _risk_to_out(r)
+    # Meta
+    c.setFont("Helvetica", 9)
+    c.drawString(20 * mm, height - 37 * mm, f"Gerado em: {generated_at.isoformat()} UTC")
+    c.drawString(20 * mm, height - 42 * mm, f"Analista: {analyst_name}")
+    c.drawString(20 * mm, height - 47 * mm, f"Risk ID: {getattr(risk, 'id', '')}")
+    c.drawString(20 * mm, height - 52 * mm, f"Entidade: {getattr(risk, 'entity_id', '')}")
+
+    # Core summary
+    y = height - 65 * mm
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(20 * mm, y, "1) Identificação")
+    y -= 7 * mm
+    c.setFont("Helvetica", 10)
+    c.drawString(20 * mm, y, f"Nome: {getattr(risk, 'query_name', '')}")
+    y -= 6 * mm
+    c.drawString(20 * mm, y, f"Nacionalidade: {getattr(risk, 'query_nationality', '')}")
+    y -= 6 * mm
+    bi = getattr(risk, "query_bi", None)
+    passport = getattr(risk, "query_passport", None)
+    if bi:
+        c.drawString(20 * mm, y, f"BI: {bi}")
+        y -= 6 * mm
+    if passport:
+        c.drawString(20 * mm, y, f"Passaporte: {passport}")
+        y -= 6 * mm
+
+    # Compliance section
+    y -= 4 * mm
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(20 * mm, y, "2) Compliance")
+    y -= 7 * mm
+    c.setFont("Helvetica", 10)
+    matches = getattr(risk, "matches", None) or []
+    c.drawString(20 * mm, y, f"Correspondências: {len(matches)}")
+    y -= 6 * mm
+    summary = getattr(risk, "summary", "") or ""
+    c.drawString(20 * mm, y, f"Resumo: {summary[:110]}")
+    y -= 6 * mm
+
+    # Underwriting / scoring
+    y -= 4 * mm
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(20 * mm, y, "3) Underwriting / Score")
+    y -= 7 * mm
+    c.setFont("Helvetica", 10)
+    score = getattr(risk, "score", "") or ""
+    c.drawString(20 * mm, y, f"Score: {score}")
+    y -= 6 * mm
+    c.drawString(20 * mm, y, "Decisão recomendada: Revisão conforme score e evidências.")
+    y -= 10 * mm
+
+    # Integrity block
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(20 * mm, y, "4) Integridade & Verificação")
+    y -= 6 * mm
+    c.setFont("Helvetica", 8)
+    c.drawString(20 * mm, y, f"Hash: {integrity_hash}")
+    y -= 5 * mm
+    c.drawString(20 * mm, y, f"Assinatura do servidor: {server_signature}")
+    y -= 5 * mm
+    c.drawString(20 * mm, y, f"Verificação: {verify_url}")
+
+    # QR (se disponível)
+    if qrcode is not None:
+        try:
+            qr_img = qrcode.make(verify_url)
+            qr_buf = BytesIO()
+            qr_img.save(qr_buf, format="PNG")
+            qr_buf.seek(0)
+            c.drawInlineImage(qr_buf, width - 45 * mm, height - 55 * mm, 30 * mm, 30 * mm)
+        except Exception:
+            pass
+
+    # Footer
+    c.setFont("Helvetica", 7)
+    c.drawString(20 * mm, 12 * mm, "Confidencial. Uso exclusivo institucional.")
+    c.showPage()
+    c.save()
+
+    return buf.getvalue()
 
 
-@router.get("/{risk_id}/pdf")
-def risk_pdf(risk_id: str, db: Session = Depends(get_db), u: User = Depends(require_perm("risk:pdf:download"))):
-    r = db.get(Risk, risk_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Risk not found")
-    _guard_risk_scope(u, r)
-
-    integrity_hash = make_integrity_hash(r)
-    verify_url = f"{settings.BASE_URL}/verify/{r.id}/{integrity_hash}"
-    server_signature = make_server_signature(integrity_hash)
-
-    try:
-        pdf_bytes = build_risk_pdf_institutional(
-            risk=r,
-            analyst_name=u.name,
-            generated_at=datetime.utcnow(),
-            integrity_hash=integrity_hash,
-            server_signature=server_signature,
-            verify_url=verify_url,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PDF generation failed: {type(e).__name__}: {e}")
-
-    log(
-        db,
-        "RISK_PDF_DOWNLOAD",
-        actor=u,
-        entity=None,
-        target_ref=r.id,
-        meta={"entity_id": r.entity_id, "hash": integrity_hash},
-    )
-
-    return StreamingResponse(
-        BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=risk_{r.id}.pdf"},
-    )
+# Alias opcional para compatibilidade (se algum endpoint ainda chamar _pt)
+def build_risk_pdf_institutional_pt(*args, **kwargs) -> bytes:
+    return build_risk_pdf_institutional(*args, **kwargs)
