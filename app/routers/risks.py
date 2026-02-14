@@ -187,6 +187,9 @@ def risk_pdf(risk_id: str, db: Session = Depends(get_db), u: User = Depends(requ
     # opcional: se os modelos existirem, preenche; se não, não quebra
     # -----------------------------
     underwriting_by_product = None
+    underwriting_error = None
+
+    # 1) Caminho ideal: modelos SQLAlchemy (se existirem)
     try:
         from app.services.underwriting_rollup import group_by_product_type  # type: ignore
         from app.models import InsurancePolicy, Payment, Claim, Cancellation, FraudFlag  # type: ignore
@@ -198,8 +201,48 @@ def risk_pdf(risk_id: str, db: Session = Depends(get_db), u: User = Depends(requ
         fraud_flags = db.query(FraudFlag).filter(FraudFlag.entity_id == r.entity_id).limit(200).all()
 
         underwriting_by_product = group_by_product_type(policies, payments, claims, cancellations, fraud_flags)
-    except Exception:
+
+    except Exception as e:
+        underwriting_error = f"models-path failed: {type(e).__name__}: {e}"
         underwriting_by_product = None
+
+    # 2) Fallback: SQL direto (contagens por product_type) se não houver models
+    if underwriting_by_product is None:
+        try:
+            from sqlalchemy import text
+
+            # policies por product_type
+            pol = db.execute(
+                text("""
+                    SELECT COALESCE(product_type, 'N/A') AS product_type, COUNT(*) AS n
+                    FROM insurance_policies
+                    WHERE entity_id = :eid
+                    GROUP BY COALESCE(product_type, 'N/A')
+                """),
+                {"eid": r.entity_id},
+            ).mappings().all()
+
+            # Se não houver policies, underwriting fica vazio
+            if not pol:
+                underwriting_by_product = {}
+            else:
+                underwriting_by_product = {row["product_type"]: {"policies": [1] * int(row["n"])} for row in pol}
+
+        except Exception as e:
+            underwriting_error = (underwriting_error or "") + f" | sql-fallback failed: {type(e).__name__}: {e}"
+            underwriting_by_product = None
+
+    # 3) Loga para veres o motivo real quando não aparece underwriting
+    if not underwriting_by_product:
+        log(
+            db,
+            "UNDERWRITING_EMPTY_OR_FAILED",
+            actor=u,
+            entity=None,
+            target_ref=r.id,
+            meta={"entity_id": r.entity_id, "error": underwriting_error or "no-data"},
+        )
+
 
     # -----------------------------
     # PDF institucional
