@@ -66,6 +66,16 @@ def verify_document(risk_id: str, hash_value: str, db: Session = Depends(get_db)
     }
 
 
+import os
+
+@app.get("/_meta")
+def meta():
+    return {
+        "commit": os.getenv("RENDER_GIT_COMMIT"),
+        "service": os.getenv("RENDER_SERVICE_NAME"),
+        "pdf_fix": "2026-02-14-pt-alias-removed",
+    }
+
 # Routers
 app.include_router(auth_router)
 app.include_router(entities_router)
