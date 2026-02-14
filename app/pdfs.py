@@ -188,9 +188,9 @@ def build_risk_pdf_institutional(
     BRAND = colors.HexColor("#0B1F3B")
     LIGHT = colors.HexColor("#F6F7F9")
 
-    H0 = ParagraphStyle("H0", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=18, spaceAfter=6, textColor=BRAND)
-    H1 = ParagraphStyle("H1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=14, spaceAfter=6)
-    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceAfter=4)
+    H0 = ParagraphStyle("H0", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=18, spaceAfter=4, textColor=BRAND)
+    H1 = ParagraphStyle("H1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=14, spaceAfter=5)
+    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceAfter=3)
     H3 = ParagraphStyle("H3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=9, spaceAfter=2)
     BODY = ParagraphStyle("BODY", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12)
     SMALL = ParagraphStyle("SMALL", parent=styles["BodyText"], fontName="Helvetica", fontSize=8, leading=10, textColor=colors.grey)
@@ -212,7 +212,7 @@ def build_risk_pdf_institutional(
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                     ("FONTSIZE", (0, 0), (-1, 0), 9),
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
                     ("GRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
                     ("FONTSIZE", (0, 1), (-1, -1), 8),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -230,8 +230,8 @@ def build_risk_pdf_institutional(
                     ("BACKGROUND", (0, 0), (-1, -1), BRAND),
                     ("LEFTPADDING", (0, 0), (-1, -1), 9),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 9),
-                    ("TOPPADDING", (0, 0), (-1, -1), 6),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
                 ]
             )
         )
@@ -257,7 +257,12 @@ def build_risk_pdf_institutional(
     decision, reasons = _decision_policy(score, pep_count, sanc_count, fraud_flags_count)
     exec_summary = _institutional_summary(score, pep_count, sanc_count, watch_count, adv_count, has_uw)
 
-    search_id = getattr(risk, "search_id", None) or getattr(risk, "search_reference", None) or getattr(risk, "reference", None) or getattr(risk, "id", "")
+    search_id = (
+        getattr(risk, "search_id", None)
+        or getattr(risk, "search_reference", None)
+        or getattr(risk, "reference", None)
+        or getattr(risk, "id", "")
+    )
     search_id = str(search_id)
 
     buf = BytesIO()
@@ -275,7 +280,7 @@ def build_risk_pdf_institutional(
     story: List[Any] = []
 
     # ============================================================
-    # CAPA EXECUTIVA
+    # CAPA EXECUTIVA (Identidade + Escopo + ID Pesquisa)
     # ============================================================
     story.append(Paragraph("CHECK INSURANCE RISK", H0))
     story.append(Paragraph(report_title, H1))
@@ -315,7 +320,7 @@ def build_risk_pdf_institutional(
             BODY,
         )
     )
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
     story.append(Paragraph("Confidencialidade", H3))
     story.append(
         Paragraph(
@@ -353,13 +358,12 @@ def build_risk_pdf_institutional(
     )
     story.append(Spacer(1, 6))
 
-    def _render_category(title: str, by_source: Dict[str, List[dict]]) -> List[Any]:
-        block: List[Any] = []
-        block.append(Paragraph(title, H2))
+    def _render_category(title: str, by_source: Dict[str, List[dict]]) -> None:
+        story.append(Paragraph(title, H2))
         if not by_source:
-            block.append(Paragraph("Sem informações a apresentar (sem registos/correspondências disponíveis).", BODY))
-            block.append(Spacer(1, 6))
-            return block
+            story.append(Paragraph("Sem informações a apresentar (sem registos/correspondências disponíveis).", BODY))
+            story.append(Spacer(1, 6))
+            return
 
         rows = [["Fonte", "Qtd. registos", "Top score"]]
         for src, hits in by_source.items():
@@ -370,20 +374,25 @@ def build_risk_pdf_institutional(
                 except Exception:
                     pass
             rows.append([_safe(src, 60), str(len(hits or [])), str(top)])
-        block.append(tbl(rows, col_widths=[90 * mm, 35 * mm, 40 * mm]))
-        block.append(Spacer(1, 6))
-        return block
+        story.append(tbl(rows, col_widths=[90 * mm, 35 * mm, 40 * mm]))
+        story.append(Spacer(1, 6))
 
-    story.extend(_render_category("2.1 PEP", comp.get("PEP") or {}))
-    story.extend(_render_category("2.2 Sanções", comp.get("SANCTIONS") or {}))
-    story.extend(_render_category("2.3 Watchlists", comp.get("WATCHLIST") or {}))
-    story.extend(_render_category("2.4 Adverse Media", comp.get("ADVERSE_MEDIA") or {}))
-
-    story.append(PageBreak())
+    _render_category("2.1 PEP", comp.get("PEP") or {})
+    _render_category("2.2 Sanções", comp.get("SANCTIONS") or {})
+    _render_category("2.3 Watchlists", comp.get("WATCHLIST") or {})
+    _render_category("2.4 Adverse Media", comp.get("ADVERSE_MEDIA") or {})
 
     # ============================================================
-    # 3) Underwriting / Seguros (sempre)
+    # 3) Underwriting / Seguros (SEMPRE)
+    # ✅ IMPORTANTÍSSIMO: sem PageBreak aqui quando não há dados,
+    # para não criar uma página só com duas linhas.
     # ============================================================
+    # Se houver underwriting com volume, quebramos para dar espaço.
+    if has_uw:
+        story.append(PageBreak())
+    else:
+        story.append(Spacer(1, 6))
+
     story.append(Paragraph("3) Underwriting / Histórico de Seguros", H1))
     story.append(
         Paragraph(
@@ -391,11 +400,11 @@ def build_risk_pdf_institutional(
             BODY,
         )
     )
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
     if not uw:
         story.append(Paragraph("Sem informações de seguros a apresentar (não existem registos disponíveis nas fontes/tabelas atualmente carregadas).", BODY))
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 4))
         story.append(Paragraph("A ausência de dados de underwriting limita a avaliação do comportamento histórico associado a produtos de seguro.", SMALL))
     else:
         for product_type in sorted(uw.keys(), key=lambda x: str(x)):
@@ -449,7 +458,7 @@ def build_risk_pdf_institutional(
                 observation = "Não existem eventos relevantes registados para este produto."
 
             block.append(Paragraph(f"<b>Observação:</b> {observation}", BODY))
-            block.append(Spacer(1, 10))
+            block.append(Spacer(1, 8))
             story.append(KeepTogether(block))
 
     story.append(PageBreak())
