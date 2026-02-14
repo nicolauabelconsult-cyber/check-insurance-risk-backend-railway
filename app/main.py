@@ -16,6 +16,8 @@ from app.routers.sources import router as sources_router
 from app.routers.risks import router as risks_router
 from app.routers.audit import router as audit_router
 from app.routers.public import router as public_router
+from app.routers.diagnostics import router as diagnostics_router
+app.include_router(diagnostics_router)
 
 
 def _parse_origins(value: str | None) -> list[str]:
