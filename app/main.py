@@ -17,10 +17,6 @@ from app.routers.risks import router as risks_router
 from app.routers.audit import router as audit_router
 from app.routers.public import router as public_router
 
-# Se existirem no teu projecto, podes incluir:
-# from app.routers.insurance_sources import router as insurance_sources_router
-# from app.routers.compliance_sources import router as compliance_sources_router
-
 
 def _parse_origins(value: str | None) -> list[str]:
     if not value:
@@ -42,7 +38,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],  # necessário para download PDF
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -70,15 +66,11 @@ def verify_document(risk_id: str, hash_value: str, db: Session = Depends(get_db)
     }
 
 
-# Routers principais
+# Routers
 app.include_router(auth_router)
 app.include_router(entities_router)
 app.include_router(users_router)
 app.include_router(sources_router)
-app.include_router(risks_router)  # <<< CRÍTICO (ativa /risks/search, /confirm, /pdf, etc.)
+app.include_router(risks_router)
 app.include_router(audit_router)
 app.include_router(public_router)
-
-# Extras (só liga se tiveres estes routers no projecto)
-# app.include_router(insurance_sources_router)
-# app.include_router(compliance_sources_router)
