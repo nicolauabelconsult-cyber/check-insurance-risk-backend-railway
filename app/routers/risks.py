@@ -14,7 +14,7 @@ from app.models import Risk, RiskStatus, User, UserRole
 from app.schemas import CandidateOut, RiskConfirmIn, RiskOut, RiskSearchIn, RiskSearchOut
 from app.audit import log
 from app.settings import settings
-from app.pdfs import build_risk_pdf_institutional_pt, make_integrity_hash, make_server_signature
+from app.pdfs import build_risk_pdf_institutional, make_integrity_hash, make_server_signature
 
 
 router = APIRouter(prefix="/risks", tags=["risks"])
