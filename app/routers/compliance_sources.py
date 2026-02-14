@@ -1,93 +1,50 @@
-from __future__ import annotations
-
-import uuid
-from datetime import date
-from typing import List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-
 from app.db import get_db
 from app.deps import require_perm
-from app.models import User, UserRole
-from app.audit import log
-from app.compliance_models import PepRecord
+from app.models_compliance import ComplianceRecord
+from datetime import datetime
 
 router = APIRouter(prefix="/compliance", tags=["compliance"])
 
+@router.post("/bulk")
+def bulk_import(payload: dict, db: Session = Depends(get_db), u=Depends(require_perm("compliance:write"))):
+    """
+    payload exemplo:
+    {
+      "entity_id": "...",
+      "category": "PEP",
+      "source_system": "INTERNAL",
+      "records": [{...},{...}]
+    }
+    """
+    entity_id = payload.get("entity_id")
+    category = payload.get("category")
+    source_system = payload.get("source_system")
+    records = payload.get("records") or []
 
-def _resolve_entity_id(u: User, requested: Optional[str]) -> str:
-    if u.role in {UserRole.SUPER_ADMIN, UserRole.ADMIN}:
-        if not requested:
-            raise HTTPException(status_code=400, detail="entity_id required")
-        return requested
-    if not u.entity_id:
-        raise HTTPException(status_code=400, detail="User entity_id missing")
-    return u.entity_id
+    if not entity_id or not category or not source_system:
+        raise HTTPException(400, "entity_id/category/source_system required")
 
-
-class PepRecordIn(BaseModel):
-    # admins podem inserir por entidade; client ignora requested
-    entity_id: Optional[str] = None
-
-    full_name: str = Field(..., min_length=2)
-
-    aka: Optional[str] = None
-    bi: Optional[str] = None
-    passport: Optional[str] = None
-    dob: Optional[date] = None
-    nationality: Optional[str] = None
-
-    pep_category: Optional[str] = None
-    pep_role: Optional[str] = None
-    country: Optional[str] = None
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    risk_level: Optional[str] = None  # LOW|MEDIUM|HIGH
-
-    source_name: Optional[str] = "PEP_INTERNAL"
-    source_ref: Optional[str] = None
-    note: Optional[str] = None
-
-
-@router.post("/pep/bulk")
-def upload_pep_bulk(
-    items: List[PepRecordIn],
-    db: Session = Depends(get_db),
-    u: User = Depends(require_perm("compliance:upload")),
-):
-    inserted = 0
-
-    for it in items:
-        entity_id = _resolve_entity_id(u, it.entity_id)
-
-        row = PepRecord(
-            id=str(uuid.uuid4()),
-            entity_id=entity_id,
-
-            full_name=it.full_name.strip(),
-            aka=it.aka,
-
-            bi=it.bi,
-            passport=it.passport,
-            dob=it.dob,
-            nationality=it.nationality,
-
-            pep_category=it.pep_category,
-            pep_role=it.pep_role,
-            country=it.country,
-            start_date=it.start_date,
-            end_date=it.end_date,
-            risk_level=(it.risk_level.upper() if it.risk_level else None),
-
-            source_name=(it.source_name or "PEP_INTERNAL"),
-            source_ref=it.source_ref,
-            note=it.note,
+    rows = []
+    for r in records:
+        rows.append(
+            ComplianceRecord(
+                entity_id=entity_id,
+                category=category,
+                source_system=source_system,
+                source_ref=r.get("source_ref"),
+                full_name=r.get("full_name") or r.get("name") or "",
+                nationality=r.get("nationality"),
+                dob=r.get("dob"),
+                id_number=r.get("id_number"),
+                aliases=r.get("aliases"),
+                risk_level=r.get("risk_level"),
+                raw=r,
+                created_at=datetime.utcnow(),
+            )
         )
-        db.add(row)
-        inserted += 1
 
+    db.add_all(rows)
     db.commit()
-    log(db, "PEP_UPLOAD_BULK", actor=u, entity=None, target_ref=str(inserted), meta={"rows": inserted})
-    return {"inserted": inserted}
+    return {"inserted": len(rows)}
