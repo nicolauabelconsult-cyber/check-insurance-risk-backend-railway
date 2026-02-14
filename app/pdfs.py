@@ -8,14 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.audit import log
 from app.db import get_db
 from app.deps import require_perm
 from app.models import Risk, RiskStatus, User, UserRole
-from app.schemas import CandidateOut, RiskConfirmIn, RiskOut, RiskSearchIn, RiskSearchOut
-from app.audit import log
-from app.settings import settings
 from app.pdfs import build_risk_pdf_institutional, make_integrity_hash, make_server_signature
-
+from app.schemas import CandidateOut, RiskConfirmIn, RiskOut, RiskSearchIn, RiskSearchOut
+from app.settings import settings
 
 router = APIRouter(prefix="/risks", tags=["risks"])
 
@@ -23,7 +22,6 @@ router = APIRouter(prefix="/risks", tags=["risks"])
 # -------------------------
 # Multi-tenant utilities
 # -------------------------
-
 def _resolve_entity_id(u: User, requested: str | None) -> str:
     if u.role in {UserRole.SUPER_ADMIN, UserRole.ADMIN}:
         if not requested:
@@ -57,7 +55,6 @@ def _risk_to_out(r: Risk) -> RiskOut:
 # -------------------------
 # Endpoints
 # -------------------------
-
 @router.get("", response_model=list[RiskOut])
 def list_risks(db: Session = Depends(get_db), u: User = Depends(require_perm("risk:read"))):
     q = db.query(Risk)
@@ -101,7 +98,6 @@ def search_risk(body: RiskSearchIn, db: Session = Depends(get_db), u: User = Dep
         )
 
     log(db, "RISK_SEARCH", actor=u, entity=None, target_ref=base, meta={"entity_id": entity_id})
-
     return RiskSearchOut(disambiguation_required=True, candidates=candidates)
 
 
@@ -111,7 +107,7 @@ def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = D
 
     pep_hits = []
     try:
-        from app.services.compliance_matching import pep_match  # vais criar na fase PEP
+        from app.services.compliance_matching import pep_match  # criado na fase PEP
         pep_hits = pep_match(
             db=db,
             entity_id=entity_id,
@@ -122,10 +118,7 @@ def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = D
     except Exception:
         pep_hits = []
 
-    base_score = 50
-    if pep_hits:
-        base_score = 85
-
+    base_score = 85 if pep_hits else 50
     score_int = int(base_score)
     score = str(score_int)
 
@@ -151,7 +144,6 @@ def confirm_risk(body: RiskConfirmIn, db: Session = Depends(get_db), u: User = D
     db.commit()
 
     log(db, "RISK_CONFIRM", actor=u, entity=None, target_ref=r.id, meta={"entity_id": entity_id, "score": score_int})
-
     return _risk_to_out(r)
 
 
@@ -167,7 +159,6 @@ def risk_pdf(risk_id: str, db: Session = Depends(get_db), u: User = Depends(requ
     server_signature = make_server_signature(integrity_hash)
 
     try:
-        # ✅ FIX: chamar a função que está realmente importada
         pdf_bytes = build_risk_pdf_institutional(
             risk=r,
             analyst_name=u.name,
