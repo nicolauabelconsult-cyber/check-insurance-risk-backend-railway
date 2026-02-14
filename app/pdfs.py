@@ -3,19 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 import hashlib
 import hmac
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from app.settings import settings
 
-# Imports leves aqui.
-# Evita importar routers ou "main" neste módulo para não criar ciclos.
-
 
 def make_integrity_hash(risk: Any) -> str:
-    """
-    Gera um hash determinístico a partir dos campos principais do Risk.
-    Usa SHA256. Não depende de DB nem de routers.
-    """
     payload = "|".join(
         [
             str(getattr(risk, "id", "") or ""),
@@ -33,16 +26,10 @@ def make_integrity_hash(risk: Any) -> str:
 
 
 def make_server_signature(integrity_hash: str) -> str:
-    """
-    Assinatura simplificada do servidor (HMAC-SHA256) para validação externa.
-    Requer PDF_SIGNING_SECRET em settings (ou usa JWT_SECRET como fallback).
-    """
     secret = getattr(settings, "PDF_SIGNING_SECRET", None) or getattr(settings, "JWT_SECRET", "")
     if not secret:
-        # Falha explícita ajuda a diagnosticar envs mal configurados
         raise RuntimeError("Missing PDF_SIGNING_SECRET/JWT_SECRET in settings")
-    sig = hmac.new(secret.encode("utf-8"), integrity_hash.encode("utf-8"), hashlib.sha256).hexdigest()
-    return sig
+    return hmac.new(secret.encode("utf-8"), integrity_hash.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def build_risk_pdf_institutional(
@@ -52,117 +39,221 @@ def build_risk_pdf_institutional(
     integrity_hash: str,
     server_signature: str,
     verify_url: str,
+    underwriting_by_product: Optional[Dict[str, Any]] = None,
+    compliance_by_category: Optional[Dict[str, Any]] = None,
 ) -> bytes:
     """
-    PDF institucional (PT) "bank-level".
-    Mantém dependências encapsuladas: reportlab só é importado dentro da função
-    para reduzir risco de crash no boot e evitar ciclos.
+    PDF banco-level:
+    - Capa + Sumário Executivo
+    - Compliance (por categoria e por fonte)
+    - Underwriting (por tipo de seguro / product_type)
+    - Integridade (hash/assinatura/QR/link)
     """
-    # Import local para reduzir risco no startup
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import mm
-    from reportlab.pdfgen import canvas
-
-    # Se tiveres qrcode, tenta usar; se não, segue sem QR.
-    try:
-        import qrcode  # type: ignore
-    except Exception:
-        qrcode = None  # type: ignore
-
     from io import BytesIO
 
-    buf = BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    width, height = A4
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    )
 
-    # Header
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(20 * mm, height - 20 * mm, "CHECK INSURANCE RISK")
-    c.setFont("Helvetica", 10)
-    c.drawString(20 * mm, height - 27 * mm, "Relatório Institucional de Risco (versão institucional)")
+    styles = getSampleStyleSheet()
+    H1 = ParagraphStyle("H1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=16, spaceAfter=8)
+    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, spaceAfter=6)
+    BODY = ParagraphStyle("BODY", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12)
+    SMALL = ParagraphStyle("SMALL", parent=styles["BodyText"], fontName="Helvetica", fontSize=8, leading=10, textColor=colors.grey)
 
-    # Meta
-    c.setFont("Helvetica", 9)
-    c.drawString(20 * mm, height - 37 * mm, f"Gerado em: {generated_at.isoformat()} UTC")
-    c.drawString(20 * mm, height - 42 * mm, f"Analista: {analyst_name}")
-    c.drawString(20 * mm, height - 47 * mm, f"Risk ID: {getattr(risk, 'id', '')}")
-    c.drawString(20 * mm, height - 52 * mm, f"Entidade: {getattr(risk, 'entity_id', '')}")
+    def _table(data: List[List[str]], col_widths=None):
+        t = Table(data, colWidths=col_widths)
+        t.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0B1F3B")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                    ("FONTSIZE", (0, 1), (-1, -1), 8),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ]
+            )
+        )
+        return t
 
-    # Core summary
-    y = height - 65 * mm
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(20 * mm, y, "1) Identificação")
-    y -= 7 * mm
-    c.setFont("Helvetica", 10)
-    c.drawString(20 * mm, y, f"Nome: {getattr(risk, 'query_name', '')}")
-    y -= 6 * mm
-    c.drawString(20 * mm, y, f"Nacionalidade: {getattr(risk, 'query_nationality', '')}")
-    y -= 6 * mm
-    bi = getattr(risk, "query_bi", None)
-    passport = getattr(risk, "query_passport", None)
-    if bi:
-        c.drawString(20 * mm, y, f"BI: {bi}")
-        y -= 6 * mm
-    if passport:
-        c.drawString(20 * mm, y, f"Passaporte: {passport}")
-        y -= 6 * mm
-
-    # Compliance section
-    y -= 4 * mm
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(20 * mm, y, "2) Compliance")
-    y -= 7 * mm
-    c.setFont("Helvetica", 10)
-    matches = getattr(risk, "matches", None) or []
-    c.drawString(20 * mm, y, f"Correspondências: {len(matches)}")
-    y -= 6 * mm
-    summary = getattr(risk, "summary", "") or ""
-    c.drawString(20 * mm, y, f"Resumo: {summary[:110]}")
-    y -= 6 * mm
-
-    # Underwriting / scoring
-    y -= 4 * mm
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(20 * mm, y, "3) Underwriting / Score")
-    y -= 7 * mm
-    c.setFont("Helvetica", 10)
-    score = getattr(risk, "score", "") or ""
-    c.drawString(20 * mm, y, f"Score: {score}")
-    y -= 6 * mm
-    c.drawString(20 * mm, y, "Decisão recomendada: Revisão conforme score e evidências.")
-    y -= 10 * mm
-
-    # Integrity block
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(20 * mm, y, "4) Integridade & Verificação")
-    y -= 6 * mm
-    c.setFont("Helvetica", 8)
-    c.drawString(20 * mm, y, f"Hash: {integrity_hash}")
-    y -= 5 * mm
-    c.drawString(20 * mm, y, f"Assinatura do servidor: {server_signature}")
-    y -= 5 * mm
-    c.drawString(20 * mm, y, f"Verificação: {verify_url}")
-
-    # QR (se disponível)
-    if qrcode is not None:
+    def _score_label(score_str: str) -> str:
         try:
-            qr_img = qrcode.make(verify_url)
-            qr_buf = BytesIO()
-            qr_img.save(qr_buf, format="PNG")
-            qr_buf.seek(0)
-            c.drawInlineImage(qr_buf, width - 45 * mm, height - 55 * mm, 30 * mm, 30 * mm)
+            s = int(score_str)
         except Exception:
-            pass
+            return "N/A"
+        if s >= 80:
+            return "ALTO"
+        if s >= 60:
+            return "MÉDIO"
+        return "BAIXO"
 
-    # Footer
-    c.setFont("Helvetica", 7)
-    c.drawString(20 * mm, 12 * mm, "Confidencial. Uso exclusivo institucional.")
-    c.showPage()
-    c.save()
+    def _header_footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.grey)
+        canvas.drawString(18 * mm, 10 * mm, "Confidencial | Check Insurance Risk")
+        canvas.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Página {doc.page}")
+        canvas.restoreState()
 
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+        title="Relatório Institucional de Risco",
+        author="Check Insurance Risk",
+    )
+
+    story = []
+
+    # --- CAPA ---
+    story.append(Paragraph("CHECK INSURANCE RISK", H1))
+    story.append(Paragraph("Relatório Institucional de Risco", H2))
+    story.append(Spacer(1, 6))
+
+    meta = [
+        ["Campo", "Valor"],
+        ["Data/Hora (UTC)", generated_at.strftime("%Y-%m-%d %H:%M:%S")],
+        ["Analista", analyst_name],
+        ["Entidade (Tenant)", str(getattr(risk, "entity_id", ""))],
+        ["Risk ID", str(getattr(risk, "id", ""))],
+        ["Nome", str(getattr(risk, "query_name", ""))],
+        ["Nacionalidade", str(getattr(risk, "query_nationality", ""))],
+        ["BI", str(getattr(risk, "query_bi", "") or "")],
+        ["Passaporte", str(getattr(risk, "query_passport", "") or "")],
+    ]
+    story.append(_table(meta, col_widths=[45 * mm, 120 * mm]))
+    story.append(Spacer(1, 10))
+
+    score = str(getattr(risk, "score", "") or "")
+    risk_level = _score_label(score)
+    summary = str(getattr(risk, "summary", "") or "")
+
+    story.append(Paragraph("Sumário Executivo", H2))
+    story.append(
+        _table(
+            [
+                ["Score", "Nível", "Decisão Recomendada"],
+                [score or "N/A", risk_level, "Revisão reforçada se houver hits; caso contrário revisão padrão."],
+            ],
+            col_widths=[30 * mm, 30 * mm, 105 * mm],
+        )
+    )
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(f"<b>Resumo:</b> {summary}", BODY))
+    story.append(PageBreak())
+
+    # --- COMPLIANCE ---
+    story.append(Paragraph("Compliance", H1))
+    story.append(Paragraph("PEP / Sanções / Watchlists (por fonte)", BODY))
+    story.append(Spacer(1, 6))
+
+    comp = compliance_by_category or {"PEP": {}, "SANCTIONS": {}, "WATCHLIST": {}}
+
+    for cat in ["PEP", "SANCTIONS", "WATCHLIST"]:
+        story.append(Paragraph(f"{cat}", H2))
+        by_source = comp.get(cat) or {}
+        if not by_source:
+            story.append(Paragraph("Sem correspondências registadas.", BODY))
+            story.append(Spacer(1, 6))
+            continue
+
+        # resumo por fonte
+        summary_rows = [["Fonte", "Qtd. Hits", "Top Score"]]
+        for src, hits in by_source.items():
+            top = max([h.get("match_score", 0) for h in hits] or [0])
+            summary_rows.append([src, str(len(hits)), str(top)])
+        story.append(_table(summary_rows, col_widths=[60 * mm, 30 * mm, 30 * mm]))
+        story.append(Spacer(1, 6))
+
+        # detalhes (top 5 por fonte)
+        for src, hits in by_source.items():
+            story.append(Paragraph(f"Fonte: <b>{src}</b>", BODY))
+            hits_sorted = sorted(hits, key=lambda x: x.get("match_score", 0), reverse=True)[:5]
+            detail = [["Nome", "Match", "Nacionalidade", "DOB", "Doc/Ref"]]
+            for h in hits_sorted:
+                detail.append(
+                    [
+                        str(h.get("full_name", ""))[:45],
+                        str(h.get("match_score", "")),
+                        str(h.get("nationality", "") or ""),
+                        str(h.get("dob", "") or ""),
+                        str(h.get("id_number", "") or h.get("source_ref", "") or "")[:25],
+                    ]
+                )
+            story.append(_table(detail, col_widths=[70 * mm, 15 * mm, 30 * mm, 20 * mm, 30 * mm]))
+            story.append(Spacer(1, 8))
+
+    story.append(PageBreak())
+
+    # --- UNDERWRITING ---
+    story.append(Paragraph("Underwriting", H1))
+    story.append(Paragraph("Histórico por tipo de seguro (product_type)", BODY))
+    story.append(Spacer(1, 6))
+
+    uw = underwriting_by_product or {}
+    if not uw:
+        story.append(Paragraph("Sem dados de underwriting disponíveis.", BODY))
+    else:
+        for product_type, pack in uw.items():
+            story.append(Paragraph(f"Tipo: <b>{product_type}</b>", H2))
+
+            # counts
+            counts = [
+                ["Apólices", "Pagamentos", "Sinistros", "Cancelamentos", "Fraud Flags"],
+                [
+                    str(len(pack.get("policies", []) or [])),
+                    str(len(pack.get("payments", []) or [])),
+                    str(len(pack.get("claims", []) or [])),
+                    str(len(pack.get("cancellations", []) or [])),
+                    str(len(pack.get("fraud_flags", []) or [])),
+                ],
+            ]
+            story.append(_table(counts, col_widths=[33 * mm] * 5))
+            story.append(Spacer(1, 6))
+
+            # mini tabelas (top 10)
+            def _mini(title, rows, cols):
+                story.append(Paragraph(title, BODY))
+                if not rows:
+                    story.append(Paragraph("Sem registos.", SMALL))
+                    story.append(Spacer(1, 4))
+                    return
+                data = [cols]
+                for r in rows[:10]:
+                    data.append([str(getattr(r, c, "") or "")[:40] for c in cols])
+                story.append(_table(data))
+                story.append(Spacer(1, 6))
+
+            _mini("Apólices (top 10)", pack.get("policies", []) or [], ["id", "product_type", "status"])
+            _mini("Pagamentos (top 10)", pack.get("payments", []) or [], ["id", "amount", "paid_at"])
+            _mini("Sinistros (top 10)", pack.get("claims", []) or [], ["id", "amount", "occurred_at"])
+            _mini("Cancelamentos (top 10)", pack.get("cancellations", []) or [], ["id", "reason", "cancelled_at"])
+            _mini("Fraud Flags (top 10)", pack.get("fraud_flags", []) or [], ["id", "flag", "created_at"])
+
+    story.append(PageBreak())
+
+    # --- INTEGRIDADE ---
+    story.append(Paragraph("Integridade & Verificação", H1))
+    story.append(Paragraph(f"<b>Hash:</b> {integrity_hash}", BODY))
+    story.append(Paragraph(f"<b>Assinatura do servidor:</b> {server_signature}", BODY))
+    story.append(Paragraph(f"<b>URL de verificação:</b> {verify_url}", BODY))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("Este relatório é confidencial. A validação deve ser feita através do link/QR.", SMALL))
+
+    doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
     return buf.getvalue()
 
 
-# Alias opcional para compatibilidade (se algum endpoint ainda chamar _pt)
 def build_risk_pdf_institutional_pt(*args, **kwargs) -> bytes:
     return build_risk_pdf_institutional(*args, **kwargs)
