@@ -1,57 +1,175 @@
-"""add branch and product_type to insurance_policies
+"""underwriting tables
 
-Revision ID: 4d2c1f7a8b10
-Revises: 9b8c1a2f0c44
-Create Date: 2026-02-13 00:00:00.000000
+Revision ID: uw_0001
+Revises: <COLOCA_AQUI_O_TEU_HEAD_ATUAL>
+Create Date: 2026-02-15
 """
-
-from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "4d2c1f7a8b10"
+try:
+    from sqlalchemy.dialects import postgresql
+    JSONB = postgresql.JSONB
+except Exception:
+    JSONB = sa.JSON
 
-# ✅ MUDA ISTO para o teu HEAD real se for diferente
-down_revision = "9b8c1a2f0c44"
-
+revision = "uw_0001"
+down_revision = "<COLOCA_AQUI_O_TEU_HEAD_ATUAL>"
 branch_labels = None
 depends_on = None
 
 
-def upgrade() -> None:
-    # Nota: no teu primeiro script já existe "product_type".
-    # Então aqui vamos adicionar "branch" e (opcionalmente) "insurance_type" se quiseres separar.
-    #
-    # Se quiseres manter apenas "product_type" como tipo, remove insurance_type.
-
-    # 1) branch (ex: Auto, Vida, Saúde, Viagem, Patrimonial, etc.)
-    op.add_column(
+def upgrade():
+    # =========================================================
+    # insurance_policies
+    # =========================================================
+    op.create_table(
         "insurance_policies",
-        sa.Column("branch", sa.String(length=50), nullable=True),
-    )
-    op.create_index(
-        "ix_insurance_policies_branch",
-        "insurance_policies",
-        ["branch"],
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("entity_id", sa.String(), sa.ForeignKey("entities.id"), nullable=False, index=True),
+
+        # subject identifiers (multi-fonte / multi-pesquisa)
+        sa.Column("subject_full_name", sa.String(), nullable=True, index=True),
+        sa.Column("subject_bi", sa.String(), nullable=True, index=True),
+        sa.Column("subject_passport", sa.String(), nullable=True, index=True),
+
+        # product segmentation
+        sa.Column("product_type", sa.String(), nullable=False, index=True),
+
+        # policy details
+        sa.Column("policy_number", sa.String(), nullable=True, index=True),
+        sa.Column("insurer_name", sa.String(), nullable=True),
+        sa.Column("status", sa.String(), nullable=True),  # ACTIVE / CANCELLED / EXPIRED / etc
+        sa.Column("start_date", sa.DateTime(), nullable=True),
+        sa.Column("end_date", sa.DateTime(), nullable=True),
+
+        # values
+        sa.Column("currency", sa.String(), nullable=True),
+        sa.Column("premium_amount", sa.Integer(), nullable=True),
+        sa.Column("sum_insured", sa.Integer(), nullable=True),
+
+        # provenance (multi-fonte)
+        sa.Column("source_name", sa.String(), nullable=True),
+        sa.Column("source_ref", sa.String(), nullable=True),
+        sa.Column("raw_payload", JSONB, nullable=True),
+
+        sa.Column("created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP")),
     )
 
-    # 2) Se QUISERES separar “ramo” e “tipo”, usa insurance_type.
-    #    Se não quiseres, apaga este bloco.
-    op.add_column(
-        "insurance_policies",
-        sa.Column("insurance_type", sa.String(length=50), nullable=True),
+    # =========================================================
+    # payments
+    # =========================================================
+    op.create_table(
+        "payments",
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("entity_id", sa.String(), sa.ForeignKey("entities.id"), nullable=False, index=True),
+
+        sa.Column("subject_full_name", sa.String(), nullable=True, index=True),
+        sa.Column("subject_bi", sa.String(), nullable=True, index=True),
+        sa.Column("subject_passport", sa.String(), nullable=True, index=True),
+
+        sa.Column("product_type", sa.String(), nullable=False, index=True),
+        sa.Column("policy_number", sa.String(), nullable=True, index=True),
+
+        sa.Column("amount", sa.Integer(), nullable=True),
+        sa.Column("currency", sa.String(), nullable=True),
+        sa.Column("paid_at", sa.DateTime(), nullable=True),
+        sa.Column("due_at", sa.DateTime(), nullable=True),
+        sa.Column("status", sa.String(), nullable=True),  # PAID / LATE / FAILED
+
+        sa.Column("source_name", sa.String(), nullable=True),
+        sa.Column("source_ref", sa.String(), nullable=True),
+        sa.Column("raw_payload", JSONB, nullable=True),
+
+        sa.Column("created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP")),
     )
-    op.create_index(
-        "ix_insurance_policies_insurance_type",
-        "insurance_policies",
-        ["insurance_type"],
+
+    # =========================================================
+    # claims
+    # =========================================================
+    op.create_table(
+        "claims",
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("entity_id", sa.String(), sa.ForeignKey("entities.id"), nullable=False, index=True),
+
+        sa.Column("subject_full_name", sa.String(), nullable=True, index=True),
+        sa.Column("subject_bi", sa.String(), nullable=True, index=True),
+        sa.Column("subject_passport", sa.String(), nullable=True, index=True),
+
+        sa.Column("product_type", sa.String(), nullable=False, index=True),
+        sa.Column("policy_number", sa.String(), nullable=True, index=True),
+
+        sa.Column("claim_number", sa.String(), nullable=True, index=True),
+        sa.Column("loss_date", sa.DateTime(), nullable=True),
+        sa.Column("reported_at", sa.DateTime(), nullable=True),
+        sa.Column("status", sa.String(), nullable=True),  # OPEN / CLOSED / REJECTED
+        sa.Column("amount_claimed", sa.Integer(), nullable=True),
+        sa.Column("amount_paid", sa.Integer(), nullable=True),
+        sa.Column("currency", sa.String(), nullable=True),
+
+        sa.Column("source_name", sa.String(), nullable=True),
+        sa.Column("source_ref", sa.String(), nullable=True),
+        sa.Column("raw_payload", JSONB, nullable=True),
+
+        sa.Column("created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP")),
+    )
+
+    # =========================================================
+    # cancellations
+    # =========================================================
+    op.create_table(
+        "cancellations",
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("entity_id", sa.String(), sa.ForeignKey("entities.id"), nullable=False, index=True),
+
+        sa.Column("subject_full_name", sa.String(), nullable=True, index=True),
+        sa.Column("subject_bi", sa.String(), nullable=True, index=True),
+        sa.Column("subject_passport", sa.String(), nullable=True, index=True),
+
+        sa.Column("product_type", sa.String(), nullable=False, index=True),
+        sa.Column("policy_number", sa.String(), nullable=True, index=True),
+
+        sa.Column("cancelled_at", sa.DateTime(), nullable=True),
+        sa.Column("reason", sa.String(), nullable=True),
+
+        sa.Column("source_name", sa.String(), nullable=True),
+        sa.Column("source_ref", sa.String(), nullable=True),
+        sa.Column("raw_payload", JSONB, nullable=True),
+
+        sa.Column("created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP")),
+    )
+
+    # =========================================================
+    # fraud_flags
+    # =========================================================
+    op.create_table(
+        "fraud_flags",
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("entity_id", sa.String(), sa.ForeignKey("entities.id"), nullable=False, index=True),
+
+        sa.Column("subject_full_name", sa.String(), nullable=True, index=True),
+        sa.Column("subject_bi", sa.String(), nullable=True, index=True),
+        sa.Column("subject_passport", sa.String(), nullable=True, index=True),
+
+        sa.Column("product_type", sa.String(), nullable=False, index=True),
+        sa.Column("policy_number", sa.String(), nullable=True, index=True),
+
+        sa.Column("flag_type", sa.String(), nullable=False),   # e.g. "MULTIPLE_CLAIMS", "DOC_MISMATCH"
+        sa.Column("severity", sa.String(), nullable=True),     # LOW/MEDIUM/HIGH
+        sa.Column("description", sa.Text(), nullable=True),
+
+        sa.Column("source_name", sa.String(), nullable=True),
+        sa.Column("source_ref", sa.String(), nullable=True),
+        sa.Column("raw_payload", JSONB, nullable=True),
+
+        sa.Column("created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP")),
     )
 
 
-def downgrade() -> None:
-    op.drop_index("ix_insurance_policies_insurance_type", table_name="insurance_policies")
-    op.drop_column("insurance_policies", "insurance_type")
-
-    op.drop_index("ix_insurance_policies_branch", table_name="insurance_policies")
-    op.drop_column("insurance_policies", "branch")
+def downgrade():
+    op.drop_table("fraud_flags")
+    op.drop_table("cancellations")
+    op.drop_table("claims")
+    op.drop_table("payments")
+    op.drop_table("insurance_policies")
