@@ -1,7 +1,118 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
+
+
+# ============================================================
+# Underwriting Loader
+# - Aggregates by product_type
+# - Pulls from DB tables if they exist in app.models
+# - Safe: if a model/table does not exist, it is skipped
+# ============================================================
+
+def _as_dict(row: Any) -> dict:
+    """
+    Convert SQLAlchemy model instance to a clean dict.
+    Avoids _sa_instance_state.
+    """
+    if row is None:
+        return {}
+    d = dict(getattr(row, "__dict__", {}) or {})
+    d.pop("_sa_instance_state", None)
+    return d
+
+
+def _get_product_type(row_dict: dict) -> str:
+    """
+    Normalize product_type naming across multiple schemas.
+    """
+    for k in ("product_type", "insurance_type", "product", "branch", "line_of_business"):
+        v = row_dict.get(k)
+        if v:
+            return str(v).strip()
+    return "N/A"
+
+
+def _best_identifier_where(
+    model: Any,
+    entity_id: str,
+    full_name: Optional[str],
+    bi: Optional[str],
+    passport: Optional[str],
+) -> List[Tuple[Any, Any]]:
+    """
+    Build filter list in priority order:
+    1) BI
+    2) Passport
+    3) Full name (contains / ilike)
+    Always includes entity_id if present on model.
+    """
+    filters = []
+
+    # entity_id
+    if hasattr(model, "entity_id") and entity_id:
+        filters.append((getattr(model, "entity_id"), entity_id))
+
+    # BI
+    if bi:
+        for k in ("bi", "id_number", "document_number", "national_id", "customer_bi"):
+            if hasattr(model, k):
+                filters.append((getattr(model, k), bi))
+                return filters  # strongest match
+
+    # Passport
+    if passport:
+        for k in ("passport", "passport_number", "document_number", "id_number", "customer_passport"):
+            if hasattr(model, k):
+                filters.append((getattr(model, k), passport))
+                return filters  # strong match
+
+    # Name (fallback)
+    if full_name:
+        # ilike if we can
+        for k in ("full_name", "name", "customer_name", "insured_name", "policyholder_name"):
+            if hasattr(model, k):
+                col = getattr(model, k)
+                try:
+                    filters.append((col.ilike(f"%{full_name}%"), None))  # special marker
+                except Exception:
+                    filters.append((col, full_name))
+                return filters
+
+    return filters
+
+
+def _query_model(
+    db: Session,
+    model: Any,
+    entity_id: str,
+    full_name: Optional[str],
+    bi: Optional[str],
+    passport: Optional[str],
+    limit: int = 200,
+) -> List[dict]:
+    """
+    Query a given model safely.
+    Supports both equals filters and ilike filters.
+    """
+    q = db.query(model)
+
+    filters = _best_identifier_where(model, entity_id, full_name, bi, passport)
+    for f in filters:
+        col_or_expr, val = f
+        # ilike branch uses (expr, None)
+        if val is None and str(col_or_expr).lower().find("like") >= 0:
+            q = q.filter(col_or_expr)
+        else:
+            q = q.filter(col_or_expr == val)
+
+    try:
+        rows = q.limit(limit).all()
+    except Exception:
+        return []
+
+    return [_as_dict(r) for r in (rows or [])]
 
 
 def load_underwriting_by_product(
@@ -10,113 +121,69 @@ def load_underwriting_by_product(
     full_name: Optional[str] = None,
     bi: Optional[str] = None,
     passport: Optional[str] = None,
-) -> Dict[str, Dict[str, Any]]:
+) -> Dict[str, Dict[str, List[dict]]]:
     """
-    Agrega underwriting por product_type.
-    - Se tabelas/modelos não existirem, devolve {} (não quebra PDF).
-    - Quando existirem dados, devolve:
-      {
-        "AUTOMOVEL": {
-          "policies": [...],
-          "payments": [...],
-          "claims": [...],
-          "cancellations": [...],
-          "fraud_flags": [...]
-        },
-        ...
+    Returns:
+    {
+      "<product_type>": {
+         "policies": [...],
+         "payments": [...],
+         "claims": [...],
+         "cancellations": [...],
+         "fraud_flags": [...]
       }
+    }
+
+    If no data exists, returns {} (PDF will display "Sem informações...").
     """
-    out: Dict[str, Dict[str, Any]] = {}
-
-    # Importa modelos apenas se existirem (evita ImportError)
+    # Import models lazily (prevents circular imports / missing models)
     try:
-        from app import models  # type: ignore
+        import app.models as models
     except Exception:
-        return out
+        return {}
 
-    Policy = getattr(models, "InsurancePolicy", None)
-    Payment = getattr(models, "Payment", None)
-    Claim = getattr(models, "Claim", None)
-    Cancellation = getattr(models, "Cancellation", None)
-    FraudFlag = getattr(models, "FraudFlag", None)
+    # Candidate model class names (support multiple possible names)
+    candidates = {
+        "policies": ["InsurancePolicy", "Policy", "InsurancePolicies", "PolicyRecord"],
+        "payments": ["Payment", "Payments", "PremiumPayment", "PolicyPayment"],
+        "claims": ["Claim", "Claims", "InsuranceClaim", "ClaimRecord"],
+        "cancellations": ["Cancellation", "Cancellations", "PolicyCancellation"],
+        "fraud_flags": ["FraudFlag", "FraudFlags", "FraudIndicator", "FraudSignal"],
+    }
 
-    if Policy is None:
-        return out
+    # Resolve available model classes
+    resolved: Dict[str, Any] = {}
+    for bucket, names in candidates.items():
+        for name in names:
+            if hasattr(models, name):
+                resolved[bucket] = getattr(models, name)
+                break  # first match wins
 
-    # Base query policies por entity_id
-    q_pol = db.query(Policy).filter(getattr(Policy, "entity_id") == entity_id)
+    if not resolved:
+        return {}
 
-    # Opcional: filtrar por identificadores se campos existirem
-    # (tolerante: só aplica se a coluna existir)
-    def _maybe_filter(q, model, col, value):
-        if value is None:
-            return q
-        if hasattr(model, col):
-            return q.filter(getattr(model, col) == value)
-        return q
+    # Pull data
+    raw: Dict[str, List[dict]] = {k: [] for k in candidates.keys()}
 
-    q_pol = _maybe_filter(q_pol, Policy, "holder_name", full_name)
-    q_pol = _maybe_filter(q_pol, Policy, "holder_bi", bi)
-    q_pol = _maybe_filter(q_pol, Policy, "holder_passport", passport)
+    for bucket, model in resolved.items():
+        raw[bucket] = _query_model(
+            db=db,
+            model=model,
+            entity_id=entity_id,
+            full_name=full_name,
+            bi=bi,
+            passport=passport,
+        )
 
-    policies = q_pol.limit(500).all()
+    # Group by product_type
+    out: Dict[str, Dict[str, List[dict]]] = {}
+    for bucket_name, rows in raw.items():
+        for row in rows:
+            pt = _get_product_type(row)
+            out.setdefault(pt, {"policies": [], "payments": [], "claims": [], "cancellations": [], "fraud_flags": []})
+            out[pt][bucket_name].append(row)
 
-    # Helper: garantir pack por product_type
-    def pack(pt: str):
-        k = (pt or "N/A").strip() or "N/A"
-        out.setdefault(k, {"policies": [], "payments": [], "claims": [], "cancellations": [], "fraud_flags": []})
-        return out[k]
-
-    # Policies
-    for p in policies:
-        pt = getattr(p, "product_type", None) or getattr(p, "insurance_type", None) or "N/A"
-        d = {
-            "policy_no": getattr(p, "policy_no", None),
-            "status": getattr(p, "status", None),
-            "start_date": getattr(p, "start_date", None),
-            "end_date": getattr(p, "end_date", None),
-            "premium": getattr(p, "premium", None),
-        }
-        pack(str(pt))["policies"].append(d)
-
-    # Se não tiver outros modelos, termina aqui
-    if Payment is None and Claim is None and Cancellation is None and FraudFlag is None:
-        return out
-
-    # Tenta ligar por policy_id, se existir
-    policy_ids = [getattr(p, "id", None) for p in policies if getattr(p, "id", None)]
-    if not policy_ids:
-        return out
-
-    if Payment is not None:
-        rows = db.query(Payment).filter(getattr(Payment, "policy_id").in_(policy_ids)).limit(2000).all()
-        for x in rows:
-            pt = getattr(x, "product_type", None) or getattr(x, "insurance_type", None)
-            if not pt:
-                # tenta descobrir product_type via policy_id (fallback simples)
-                pt = "N/A"
-            d = {"amount": getattr(x, "amount", None), "status": getattr(x, "status", None), "paid_at": getattr(x, "paid_at", None)}
-            pack(str(pt))["payments"].append(d)
-
-    if Claim is not None:
-        rows = db.query(Claim).filter(getattr(Claim, "policy_id").in_(policy_ids)).limit(2000).all()
-        for x in rows:
-            pt = getattr(x, "product_type", None) or getattr(x, "insurance_type", None) or "N/A"
-            d = {"amount": getattr(x, "amount", None), "occurred_at": getattr(x, "occurred_at", None), "status": getattr(x, "status", None)}
-            pack(str(pt))["claims"].append(d)
-
-    if Cancellation is not None:
-        rows = db.query(Cancellation).filter(getattr(Cancellation, "policy_id").in_(policy_ids)).limit(2000).all()
-        for x in rows:
-            pt = getattr(x, "product_type", None) or getattr(x, "insurance_type", None) or "N/A"
-            d = {"reason": getattr(x, "reason", None), "cancelled_at": getattr(x, "cancelled_at", None)}
-            pack(str(pt))["cancellations"].append(d)
-
-    if FraudFlag is not None:
-        rows = db.query(FraudFlag).filter(getattr(FraudFlag, "policy_id").in_(policy_ids)).limit(2000).all()
-        for x in rows:
-            pt = getattr(x, "product_type", None) or getattr(x, "insurance_type", None) or "N/A"
-            d = {"code": getattr(x, "code", None), "severity": getattr(x, "severity", None), "notes": getattr(x, "notes", None)}
-            pack(str(pt))["fraud_flags"].append(d)
+    # Cleanup: drop empty product_types
+    out = {pt: pack for pt, pack in out.items() if any(len(pack[k]) > 0 for k in pack.keys())}
 
     return out
