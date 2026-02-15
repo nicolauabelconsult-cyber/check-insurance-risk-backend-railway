@@ -1,118 +1,75 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 from sqlalchemy.orm import Session
 
+from app.models import Risk
 
-# ============================================================
-# Underwriting Loader
-# - Aggregates by product_type
-# - Pulls from DB tables if they exist in app.models
-# - Safe: if a model/table does not exist, it is skipped
-# ============================================================
 
-def _as_dict(row: Any) -> dict:
+def _normalize_to_product_dict(uw_kpis: Any, uw_factors: Any) -> Dict[str, Any]:
     """
-    Convert SQLAlchemy model instance to a clean dict.
-    Avoids _sa_instance_state.
+    Aceita vários formatos e devolve SEMPRE:
+    {
+      "<product_type>": {
+        "policies": [...],
+        "payments": [...],
+        "claims": [...],
+        "cancellations": [...],
+        "fraud_flags": [...],
+        "kpis": {...},
+        "factors": {...},
+        "summary": "...",
+        "score": 0,
+        "decision": "..."
+      }
+    }
+
+    Se não existir product_type (porque o teu Risk guarda só KPIs gerais),
+    colocamos tudo em "GERAL".
     """
-    if row is None:
-        return {}
-    d = dict(getattr(row, "__dict__", {}) or {})
-    d.pop("_sa_instance_state", None)
-    return d
+    out: Dict[str, Any] = {}
 
+    # Se já vier no formato por produto, aceitamos
+    if isinstance(uw_kpis, dict):
+        # Se tiver cara de por-produto: chaves "AUTO", "SAUDE", etc com dict interno
+        # Ex: {"AUTO": {"payments":[], ...}, "SAUDE": {...}}
+        looks_like_by_product = False
+        for v in uw_kpis.values():
+            if isinstance(v, dict):
+                if any(k in v for k in ("policies", "payments", "claims", "cancellations", "fraud_flags", "kpis")):
+                    looks_like_by_product = True
+                    break
 
-def _get_product_type(row_dict: dict) -> str:
-    """
-    Normalize product_type naming across multiple schemas.
-    """
-    for k in ("product_type", "insurance_type", "product", "branch", "line_of_business"):
-        v = row_dict.get(k)
-        if v:
-            return str(v).strip()
-    return "N/A"
+        if looks_like_by_product:
+            for pt, pack in uw_kpis.items():
+                if not isinstance(pack, dict):
+                    pack = {"kpis": {"value": pack}}
+                out[str(pt)] = {
+                    "policies": pack.get("policies", []) or [],
+                    "payments": pack.get("payments", []) or [],
+                    "claims": pack.get("claims", []) or [],
+                    "cancellations": pack.get("cancellations", []) or [],
+                    "fraud_flags": pack.get("fraud_flags", []) or [],
+                    "kpis": pack.get("kpis", {}) if isinstance(pack.get("kpis", {}), dict) else {"value": pack.get("kpis")},
+                    "factors": pack.get("factors", {}) if isinstance(pack.get("factors", {}), dict) else {"value": pack.get("factors")},
+                }
+            # factors gerais podem entrar por fora
+            if isinstance(uw_factors, dict) and uw_factors:
+                out.setdefault("GERAL", {"policies": [], "payments": [], "claims": [], "cancellations": [], "fraud_flags": [], "kpis": {}, "factors": {}})
+                out["GERAL"]["factors"] = uw_factors
+            return out
 
-
-def _best_identifier_where(
-    model: Any,
-    entity_id: str,
-    full_name: Optional[str],
-    bi: Optional[str],
-    passport: Optional[str],
-) -> List[Tuple[Any, Any]]:
-    """
-    Build filter list in priority order:
-    1) BI
-    2) Passport
-    3) Full name (contains / ilike)
-    Always includes entity_id if present on model.
-    """
-    filters = []
-
-    # entity_id
-    if hasattr(model, "entity_id") and entity_id:
-        filters.append((getattr(model, "entity_id"), entity_id))
-
-    # BI
-    if bi:
-        for k in ("bi", "id_number", "document_number", "national_id", "customer_bi"):
-            if hasattr(model, k):
-                filters.append((getattr(model, k), bi))
-                return filters  # strongest match
-
-    # Passport
-    if passport:
-        for k in ("passport", "passport_number", "document_number", "id_number", "customer_passport"):
-            if hasattr(model, k):
-                filters.append((getattr(model, k), passport))
-                return filters  # strong match
-
-    # Name (fallback)
-    if full_name:
-        # ilike if we can
-        for k in ("full_name", "name", "customer_name", "insured_name", "policyholder_name"):
-            if hasattr(model, k):
-                col = getattr(model, k)
-                try:
-                    filters.append((col.ilike(f"%{full_name}%"), None))  # special marker
-                except Exception:
-                    filters.append((col, full_name))
-                return filters
-
-    return filters
-
-
-def _query_model(
-    db: Session,
-    model: Any,
-    entity_id: str,
-    full_name: Optional[str],
-    bi: Optional[str],
-    passport: Optional[str],
-    limit: int = 200,
-) -> List[dict]:
-    """
-    Query a given model safely.
-    Supports both equals filters and ilike filters.
-    """
-    q = db.query(model)
-
-    filters = _best_identifier_where(model, entity_id, full_name, bi, passport)
-    for f in filters:
-        col_or_expr, val = f
-        # ilike branch uses (expr, None)
-        if val is None and str(col_or_expr).lower().find("like") >= 0:
-            q = q.filter(col_or_expr)
-        else:
-            q = q.filter(col_or_expr == val)
-
-    try:
-        rows = q.limit(limit).all()
-    except Exception:
-        return []
-
-    return [_as_dict(r) for r in (rows or [])]
+    # Caso padrão (o teu hoje): KPIs e factors gerais
+    out["GERAL"] = {
+        "policies": [],
+        "payments": [],
+        "claims": [],
+        "cancellations": [],
+        "fraud_flags": [],
+        "kpis": uw_kpis if isinstance(uw_kpis, dict) else ({} if uw_kpis is None else {"value": uw_kpis}),
+        "factors": uw_factors if isinstance(uw_factors, dict) else ({} if uw_factors is None else {"value": uw_factors}),
+    }
+    return out
 
 
 def load_underwriting_by_product(
@@ -121,69 +78,53 @@ def load_underwriting_by_product(
     full_name: Optional[str] = None,
     bi: Optional[str] = None,
     passport: Optional[str] = None,
-) -> Dict[str, Dict[str, List[dict]]]:
+) -> Dict[str, Any]:
     """
-    Returns:
-    {
-      "<product_type>": {
-         "policies": [...],
-         "payments": [...],
-         "claims": [...],
-         "cancellations": [...],
-         "fraud_flags": [...]
-      }
-    }
+    Como ainda não tens tabelas underwriting, buscamos o underwriting NO PRÓPRIO Risk
+    (uw_kpis/uw_factors/uw_summary/uw_score/uw_decision).
 
-    If no data exists, returns {} (PDF will display "Sem informações...").
+    Estratégia:
+    - Primeiro tenta encontrar o Risk mais recente daquela entidade que combine BI/passport/name.
+    - Se não encontrar, devolve {} (PDF mostrará "Sem informações...").
     """
-    # Import models lazily (prevents circular imports / missing models)
-    try:
-        import app.models as models
-    except Exception:
+    q = db.query(Risk).filter(Risk.entity_id == entity_id)
+
+    # prioridade: BI > passport > nome
+    if bi:
+        q = q.filter(Risk.query_bi == bi)
+    elif passport:
+        q = q.filter(Risk.query_passport == passport)
+    elif full_name:
+        q = q.filter(Risk.query_name.ilike(f"%{full_name}%"))
+
+    r = q.order_by(Risk.created_at.desc()).first()
+    if not r:
         return {}
 
-    # Candidate model class names (support multiple possible names)
-    candidates = {
-        "policies": ["InsurancePolicy", "Policy", "InsurancePolicies", "PolicyRecord"],
-        "payments": ["Payment", "Payments", "PremiumPayment", "PolicyPayment"],
-        "claims": ["Claim", "Claims", "InsuranceClaim", "ClaimRecord"],
-        "cancellations": ["Cancellation", "Cancellations", "PolicyCancellation"],
-        "fraud_flags": ["FraudFlag", "FraudFlags", "FraudIndicator", "FraudSignal"],
-    }
+    by_product = _normalize_to_product_dict(r.uw_kpis, r.uw_factors)
 
-    # Resolve available model classes
-    resolved: Dict[str, Any] = {}
-    for bucket, names in candidates.items():
-        for name in names:
-            if hasattr(models, name):
-                resolved[bucket] = getattr(models, name)
-                break  # first match wins
+    # Enriquecer com os campos superiores
+    for _pt, pack in by_product.items():
+        if isinstance(pack, dict):
+            pack["summary"] = r.uw_summary
+            pack["score"] = r.uw_score
+            pack["decision"] = r.uw_decision
 
-    if not resolved:
-        return {}
+    # Se não houver nada mesmo (kpis/factors vazios e listas vazias), devolve {}
+    has_any = False
+    for pack in by_product.values():
+        if not isinstance(pack, dict):
+            continue
+        if pack.get("policies") or pack.get("payments") or pack.get("claims") or pack.get("cancellations") or pack.get("fraud_flags"):
+            has_any = True
+            break
+        if (pack.get("kpis") and isinstance(pack.get("kpis"), dict) and len(pack["kpis"]) > 0) or (
+            pack.get("factors") and isinstance(pack.get("factors"), dict) and len(pack["factors"]) > 0
+        ):
+            has_any = True
+            break
+        if pack.get("summary") or pack.get("score") or pack.get("decision"):
+            has_any = True
+            break
 
-    # Pull data
-    raw: Dict[str, List[dict]] = {k: [] for k in candidates.keys()}
-
-    for bucket, model in resolved.items():
-        raw[bucket] = _query_model(
-            db=db,
-            model=model,
-            entity_id=entity_id,
-            full_name=full_name,
-            bi=bi,
-            passport=passport,
-        )
-
-    # Group by product_type
-    out: Dict[str, Dict[str, List[dict]]] = {}
-    for bucket_name, rows in raw.items():
-        for row in rows:
-            pt = _get_product_type(row)
-            out.setdefault(pt, {"policies": [], "payments": [], "claims": [], "cancellations": [], "fraud_flags": []})
-            out[pt][bucket_name].append(row)
-
-    # Cleanup: drop empty product_types
-    out = {pt: pack for pt, pack in out.items() if any(len(pack[k]) > 0 for k in pack.keys())}
-
-    return out
+    return by_product if has_any else {}
