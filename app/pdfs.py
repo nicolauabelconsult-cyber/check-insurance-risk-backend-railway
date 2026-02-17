@@ -145,7 +145,7 @@ def _institutional_summary(score: Any, pep: int, sanc: int, watch: int, adv: int
 
 
 # ============================================================
-# PDF Builder (Institutional 1.0 Final)
+# PDF Builder (Institutional 1.0 Final - compact layout)
 # ============================================================
 def build_risk_pdf_institutional(
     risk: Any,
@@ -173,6 +173,7 @@ def build_risk_pdf_institutional(
         PageBreak,
         KeepTogether,
         Image,
+        CondPageBreak,
     )
 
     # QR opcional
@@ -188,11 +189,11 @@ def build_risk_pdf_institutional(
     BRAND = colors.HexColor("#0B1F3B")
     LIGHT = colors.HexColor("#F6F7F9")
 
-    H0 = ParagraphStyle("H0", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=18, spaceAfter=4, textColor=BRAND)
-    H1 = ParagraphStyle("H1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=14, spaceAfter=5)
-    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, spaceAfter=3)
-    H3 = ParagraphStyle("H3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=9, spaceAfter=2)
-    BODY = ParagraphStyle("BODY", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12)
+    H0 = ParagraphStyle("H0", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=18, spaceAfter=3, textColor=BRAND)
+    H1 = ParagraphStyle("H1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=13, spaceAfter=4)
+    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=10.5, spaceAfter=2)
+    H3 = ParagraphStyle("H3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=9, spaceAfter=1)
+    BODY = ParagraphStyle("BODY", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=11)
     SMALL = ParagraphStyle("SMALL", parent=styles["BodyText"], fontName="Helvetica", fontSize=8, leading=10, textColor=colors.grey)
 
     def header_footer(canvas, doc):
@@ -212,11 +213,14 @@ def build_risk_pdf_institutional(
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                     ("FONTSIZE", (0, 0), (-1, 0), 9),
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 5),
+                    ("TOPPADDING", (0, 0), (-1, 0), 5),
                     ("GRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
                     ("FONTSIZE", (0, 1), (-1, -1), 8),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHT]),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                 ]
             )
         )
@@ -271,8 +275,8 @@ def build_risk_pdf_institutional(
         pagesize=A4,
         leftMargin=18 * mm,
         rightMargin=18 * mm,
-        topMargin=18 * mm,
-        bottomMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
         title=report_title,
         author="Check Insurance Risk",
     )
@@ -280,11 +284,11 @@ def build_risk_pdf_institutional(
     story: List[Any] = []
 
     # ============================================================
-    # CAPA EXECUTIVA (Identidade + Escopo + ID Pesquisa)
+    # CAPA EXECUTIVA
     # ============================================================
     story.append(Paragraph("CHECK INSURANCE RISK", H0))
     story.append(Paragraph(report_title, H1))
-    story.append(Spacer(1, 6))
+    story.append(Spacer(1, 4))
 
     person_rows = [
         ["Campo", "Valor"],
@@ -296,10 +300,10 @@ def build_risk_pdf_institutional(
         ["ID da Pesquisa", _safe(search_id, 80)],
     ]
     story.append(tbl(person_rows, col_widths=[55 * mm, 110 * mm]))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
     story.append(badge(f"DECISÃO RECOMENDADA: {decision}"))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
     story.append(
         tbl(
@@ -310,7 +314,7 @@ def build_risk_pdf_institutional(
             col_widths=[16 * mm, 18 * mm, 45 * mm, 16 * mm, 20 * mm, 24 * mm, 25 * mm],
         )
     )
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
     story.append(Paragraph("Escopo (declaração institucional)", H3))
     story.append(
@@ -320,7 +324,7 @@ def build_risk_pdf_institutional(
             BODY,
         )
     )
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
     story.append(Paragraph("Confidencialidade", H3))
     story.append(
         Paragraph(
@@ -336,14 +340,15 @@ def build_risk_pdf_institutional(
     # ============================================================
     story.append(Paragraph("1) Sumário Executivo", H1))
     story.append(Paragraph(exec_summary, BODY))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
     rr = [["#", "Razão (Top 5)"]]
     for i, r_ in enumerate(reasons, 1):
         rr.append([str(i), _safe(r_, 260)])
     story.append(tbl(rr, col_widths=[10 * mm, 155 * mm]))
 
-    story.append(PageBreak())
+    # só quebra se não houver espaço para começar Compliance com “ar”
+    story.append(CondPageBreak(25 * mm))
 
     # ============================================================
     # 2) Compliance
@@ -356,13 +361,13 @@ def build_risk_pdf_institutional(
             BODY,
         )
     )
-    story.append(Spacer(1, 6))
+    story.append(Spacer(1, 4))
 
     def _render_category(title: str, by_source: Dict[str, List[dict]]) -> None:
         story.append(Paragraph(title, H2))
         if not by_source:
             story.append(Paragraph("Sem informações a apresentar (sem registos/correspondências disponíveis).", BODY))
-            story.append(Spacer(1, 6))
+            story.append(Spacer(1, 4))
             return
 
         rows = [["Fonte", "Qtd. registos", "Top score"]]
@@ -375,7 +380,7 @@ def build_risk_pdf_institutional(
                     pass
             rows.append([_safe(src, 60), str(len(hits or [])), str(top)])
         story.append(tbl(rows, col_widths=[90 * mm, 35 * mm, 40 * mm]))
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 5))
 
     _render_category("2.1 PEP", comp.get("PEP") or {})
     _render_category("2.2 Sanções", comp.get("SANCTIONS") or {})
@@ -383,16 +388,9 @@ def build_risk_pdf_institutional(
     _render_category("2.4 Adverse Media", comp.get("ADVERSE_MEDIA") or {})
 
     # ============================================================
-    # 3) Underwriting / Seguros (SEMPRE)
-    # ✅ IMPORTANTÍSSIMO: sem PageBreak aqui quando não há dados,
-    # para não criar uma página só com duas linhas.
+    # 3) Underwriting / Seguros (SEMPRE, mas sem criar páginas vazias)
     # ============================================================
-    # Se houver underwriting com volume, quebramos para dar espaço.
-    if has_uw:
-        story.append(PageBreak())
-    else:
-        story.append(Spacer(1, 6))
-
+    story.append(CondPageBreak(30 * mm))
     story.append(Paragraph("3) Underwriting / Histórico de Seguros", H1))
     story.append(
         Paragraph(
@@ -400,12 +398,22 @@ def build_risk_pdf_institutional(
             BODY,
         )
     )
-    story.append(Spacer(1, 6))
+    story.append(Spacer(1, 4))
 
     if not uw:
-        story.append(Paragraph("Sem informações de seguros a apresentar (não existem registos disponíveis nas fontes/tabelas atualmente carregadas).", BODY))
-        story.append(Spacer(1, 4))
-        story.append(Paragraph("A ausência de dados de underwriting limita a avaliação do comportamento histórico associado a produtos de seguro.", SMALL))
+        story.append(
+            Paragraph(
+                "Sem informações de seguros a apresentar (não existem registos disponíveis nas fontes/tabelas atualmente carregadas).",
+                BODY,
+            )
+        )
+        story.append(Spacer(1, 3))
+        story.append(
+            Paragraph(
+                "A ausência de dados de underwriting limita a avaliação do comportamento histórico associado a produtos de seguro.",
+                SMALL,
+            )
+        )
     else:
         for product_type in sorted(uw.keys(), key=lambda x: str(x)):
             pack = uw.get(product_type) or {}
@@ -446,7 +454,7 @@ def build_risk_pdf_institutional(
                 ["Indicadores de fraude (fraud flags)", str(len(fraud_flags))],
             ]
             block.append(tbl(summary_table, col_widths=[95 * mm, 70 * mm]))
-            block.append(Spacer(1, 6))
+            block.append(Spacer(1, 4))
 
             if len(fraud_flags) > 0:
                 observation = "Foram identificados indicadores de risco operacional associados a este produto, recomendando validação adicional e revisão reforçada."
@@ -458,14 +466,13 @@ def build_risk_pdf_institutional(
                 observation = "Não existem eventos relevantes registados para este produto."
 
             block.append(Paragraph(f"<b>Observação:</b> {observation}", BODY))
-            block.append(Spacer(1, 8))
+            block.append(Spacer(1, 6))
             story.append(KeepTogether(block))
-
-    story.append(PageBreak())
 
     # ============================================================
     # 4) Metodologia e Limitações
     # ============================================================
+    story.append(CondPageBreak(35 * mm))
     story.append(Paragraph("4) Metodologia e Limitações", H1))
     story.append(
         Paragraph(
@@ -475,7 +482,7 @@ def build_risk_pdf_institutional(
             BODY,
         )
     )
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
     limits = [
         "A ausência de correspondências não constitui prova de inexistência de risco.",
@@ -488,14 +495,13 @@ def build_risk_pdf_institutional(
         lt.append([str(i), _safe(t, 260)])
     story.append(tbl(lt, col_widths=[10 * mm, 155 * mm]))
 
-    story.append(PageBreak())
-
     # ============================================================
     # 5) Integridade e Verificação
     # ============================================================
+    story.append(CondPageBreak(35 * mm))
     story.append(Paragraph("5) Integridade e Verificação", H1))
     story.append(Paragraph("Este apêndice suporta rastreabilidade e auditoria.", BODY))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
     integrity_rows = [
         ["Campo", "Valor"],
@@ -506,7 +512,7 @@ def build_risk_pdf_institutional(
         ["URL de verificação", _safe(verify_url, 260)],
     ]
     story.append(tbl(integrity_rows, col_widths=[55 * mm, 110 * mm]))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
 
     if qrcode is not None:
         try:
@@ -516,8 +522,8 @@ def build_risk_pdf_institutional(
             qr_img.save(qbuf, format="PNG")
             qbuf.seek(0)
             story.append(Paragraph("QR Code de verificação:", BODY))
-            story.append(Spacer(1, 4))
-            story.append(Image(qbuf, width=30 * mm, height=30 * mm))
+            story.append(Spacer(1, 3))
+            story.append(Image(qbuf, width=28 * mm, height=28 * mm))
         except Exception:
             story.append(Paragraph("QR indisponível (erro ao gerar).", SMALL))
     else:
