@@ -3,6 +3,7 @@ from .models import UserRole
 # Fonte única de verdade
 PERMS_BY_ROLE = {
     UserRole.SUPER_ADMIN: {
+        "dashboard:read",
         "entities:read", "entities:create", "entities:update",
         "users:read", "users:create", "users:update", "users:delete",
         "sources:read", "sources:upload", "sources:update", "sources:delete",
@@ -10,6 +11,7 @@ PERMS_BY_ROLE = {
         "audit:read",
     },
     UserRole.ADMIN: {
+        "dashboard:read",
         "entities:read",
         "users:read", "users:create", "users:update",
         "sources:read", "sources:upload", "sources:update",
@@ -32,11 +34,13 @@ PERMS_BY_ROLE = {
 # ✅ compatibilidade total com imports antigos
 ROLE_PERMS = PERMS_BY_ROLE
 
+
 def has_perm(role: UserRole, perm: str) -> bool:
     return perm in PERMS_BY_ROLE.get(role, set())
+
 
 def role_perms(role: UserRole) -> list[str]:
     return sorted(list(PERMS_BY_ROLE.get(role, set())))
 
-"compliance:upload",
 
+"compliance:upload",
