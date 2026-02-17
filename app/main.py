@@ -1,3 +1,4 @@
+# app/main.py
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -32,22 +33,45 @@ def create_app() -> FastAPI:
     # gzip (bom para JSON grandes)
     app.add_middleware(GZipMiddleware, minimum_size=1200)
 
-    # CORS
+    # -------------------------
+    # CORS (produção + dev)
+    # -------------------------
+    # Se CORS_ORIGINS vier vazio, usamos defaults seguros.
+    # Se vier "*" (ou ".*"), ativamos allow_origin_regex para não bloquear domínios.
     cors_origins = _parse_csv(getattr(settings, "CORS_ORIGINS", None))
-    if not cors_origins:
-        # ✅ Produção: domínio oficial
-        cors_origins = [
-            "https://checkinsurancerisk.com",
-            "https://www.checkinsurancerisk.com",
-        ]
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    default_origins = [
+        "https://checkinsurancerisk.com",
+        "https://www.checkinsurancerisk.com",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+    if not cors_origins:
+        cors_origins = default_origins
+
+    use_regex = any(x in ("*", ".*") for x in cors_origins)
+
+    if use_regex:
+        # Regex que aceita qualquer origem (bom para debugging rápido em produção)
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=".*",
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        # Lista explícita (recomendado)
+        # + Regex extra para subdomínios do teu domínio (se precisares no futuro)
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_origin_regex=r"^https:\/\/([a-z0-9-]+\.)?checkinsurancerisk\.com$",
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     @app.get("/", include_in_schema=False)
     def root():
