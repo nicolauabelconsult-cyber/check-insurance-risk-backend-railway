@@ -8,9 +8,8 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import func, case
 from sqlalchemy.orm import Session
 
-from app.deps import get_db
-from app.security import require_perm  # ou de onde vem o require_perm no teu projeto
-from app.models import User, UserRole, Risk, Entity, AuditLog, Source  # ajusta se algum nome for diferente
+from app.deps import get_db, require_perm
+from app.models import User, UserRole, Risk, Entity, AuditLog, Source
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
