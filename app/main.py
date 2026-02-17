@@ -16,6 +16,9 @@ from app.routers.risks import router as risks_router
 from app.routers.audit import router as audit_router
 from app.routers.public import router as public_router
 
+# ✅ Dashboard (faltava incluir no main)
+from app.routers.dashboard import router as dashboard_router
+
 # Novo: diagnostics
 from app.routers.diagnostics import router as diagnostics_router
 
@@ -72,6 +75,10 @@ def create_app() -> FastAPI:
     app.include_router(risks_router)
     app.include_router(audit_router)
     app.include_router(public_router)
+
+    # ✅ Aqui estava a falha: rota /dashboard/summary não existia porque o router não era incluído
+    app.include_router(dashboard_router)
+
     app.include_router(diagnostics_router)
 
     return app
