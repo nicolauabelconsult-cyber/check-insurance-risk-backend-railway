@@ -1,162 +1,258 @@
+# app/routers/dashboard.py
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Optional, Literal, Dict, Any, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, case, Integer, cast
+from fastapi import APIRouter, Depends, Query, HTTPException
+from sqlalchemy import func, case
 from sqlalchemy.orm import Session
 
-from app.db import get_db
-from app.deps import require_perm
-from app.models import AuditLog, Entity, Risk, Source, User, UserRole
+from app.deps import get_db
+from app.security import require_perm  # ou de onde vem o require_perm no teu projeto
+from app.models import User, UserRole, Risk, Entity, AuditLog, Source  # ajusta se algum nome for diferente
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
+Period = Literal["7d", "30d", "90d", "12m"]
+Granularity = Literal["day", "week"]
 
-def _dashboard_entity_scope(u: User, requested_entity_id: Optional[str]) -> Optional[str]:
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _period_start(period: Period) -> datetime:
+    now = _now_utc()
+    if period == "7d":
+        return now - timedelta(days=7)
+    if period == "30d":
+        return now - timedelta(days=30)
+    if period == "90d":
+        return now - timedelta(days=90)
+    # 12m ~ 365d (suficientemente bom para dashboard executivo)
+    return now - timedelta(days=365)
+
+
+def _bucket_case(score_col):
+    # Ajusta os thresholds se a tua política interna for outra
+    # Aqui: High >= 80, Medium >= 50, Low < 50
+    return case(
+        (score_col >= 80, "High"),
+        (score_col >= 50, "Medium"),
+        else_="Low",
+    )
+
+
+def _apply_entity_scope(q, user: User, entity_id: Optional[str]):
     """
-    Opção 2:
-      - SUPER_ADMIN: pode ver tudo (None) ou filtrar por ?entity_id=
-      - ADMIN: apenas entity_id do próprio utilizador (obrigatório existir)
-      - outros: proibido via RBAC (nem chegam aqui)
+    Escopo:
+    - SUPER_ADMIN / ADMIN podem ver tudo (ou filtrar por entity_id se enviado)
+    - CLIENT_* só podem ver a sua entity_id
     """
-    if u.role == UserRole.SUPER_ADMIN:
-        return requested_entity_id  # None => global, string => filtrado
+    if user.role in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
+        if entity_id:
+            return q.filter(Risk.entity_id == entity_id)
+        return q
 
-    if u.role == UserRole.ADMIN:
-        if not u.entity_id:
-            raise HTTPException(status_code=400, detail="ADMIN requires user.entity_id for scoped dashboard")
-        return u.entity_id
+    # CLIENT_*: força entity_id do user
+    if not getattr(user, "entity_id", None):
+        raise HTTPException(status_code=403, detail="Entity scope missing for this user")
+    return q.filter(Risk.entity_id == user.entity_id)
 
-    # por segurança (na prática RBAC já bloqueia)
-    raise HTTPException(status_code=403, detail="Not allowed")
+
+def _apply_entity_scope_audit(q, user: User, entity_id: Optional[str]):
+    if user.role in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
+        if entity_id:
+            return q.filter(AuditLog.entity_id == entity_id)
+        return q
+
+    if not getattr(user, "entity_id", None):
+        raise HTTPException(status_code=403, detail="Entity scope missing for this user")
+    return q.filter(AuditLog.entity_id == user.entity_id)
 
 
 @router.get("/summary")
 def dashboard_summary(
-    entity_id: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     u: User = Depends(require_perm("dashboard:read")),
-):
-    scope_entity_id = _dashboard_entity_scope(u, entity_id)
+    period: Period = Query("30d"),
+    entity_id: Optional[str] = Query(None),
+    audit_limit: int = Query(200, ge=10, le=500),
+) -> Dict[str, Any]:
+    start = _period_start(period)
 
-    # --- base queries com filtro por entidade (quando aplicável)
-    def _apply_entity_filter(q, model_entity_col):
-        if scope_entity_id:
-            return q.filter(model_entity_col == scope_entity_id)
-        return q
+    # ---- KPIs base ----
+    # Entidades
+    entities_q = db.query(func.count(Entity.id))
+    if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
+        # para clientes, "entidades" é 1 (a sua)
+        entities_count = 1 if getattr(u, "entity_id", None) else 0
+    else:
+        entities_count = entities_q.scalar() or 0
+        if entity_id:
+            entities_count = 1  # está a filtrar uma entidade específica
 
-    # Totais
-    q_entities = db.query(func.count(Entity.id))
-    if scope_entity_id:
-        q_entities = q_entities.filter(Entity.id == scope_entity_id)
-    entities_count = int(q_entities.scalar() or 0)
+    # Utilizadores
+    users_q = db.query(func.count(User.id))
+    if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
+        users_q = users_q.filter(User.entity_id == u.entity_id)
+        users_count = users_q.scalar() or 0
+    else:
+        if entity_id:
+            users_q = users_q.filter(User.entity_id == entity_id)
+        users_count = users_q.scalar() or 0
 
-    q_users = db.query(func.count(User.id))
-    if scope_entity_id:
-        q_users = q_users.filter(User.entity_id == scope_entity_id)
-    users_count = int(q_users.scalar() or 0)
+    # Fontes
+    sources_q = db.query(func.count(Source.id))
+    if u.role in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
+        if entity_id:
+            sources_q = sources_q.filter(Source.entity_id == entity_id)
+    else:
+        sources_q = sources_q.filter(Source.entity_id == u.entity_id)
+    sources_count = sources_q.scalar() or 0
 
-    q_sources = db.query(func.count(Source.id))
-    q_sources = _apply_entity_filter(q_sources, Source.entity_id)
-    sources_count = int(q_sources.scalar() or 0)
+    # Análises no período (Risk)
+    risks_q = db.query(Risk).filter(Risk.created_at >= start)
+    risks_q = _apply_entity_scope(risks_q, u, entity_id)
 
-    q_risks = db.query(func.count(Risk.id))
-    q_risks = _apply_entity_filter(q_risks, Risk.entity_id)
-    risks_total = int(q_risks.scalar() or 0)
+    analyses_count = risks_q.count()
 
-    # Últimos 200 riscos (para dashboard)
-    q_risks200 = db.query(Risk).order_by(Risk.created_at.desc()).limit(200)
-    q_risks200 = _apply_entity_filter(q_risks200, Risk.entity_id)
-    risks_200 = q_risks200.all()
+    # Score médio no período
+    avg_score = (
+        db.query(func.avg(Risk.score))
+        .filter(Risk.created_at >= start)
+    )
+    avg_score = _apply_entity_scope(avg_score, u, entity_id)
+    avg_score_val = avg_score.scalar()
+    avg_score_val = float(avg_score_val) if avg_score_val is not None else 0.0
 
-    # KPI score (Risk.score é string no teu modelo)
-    scores = []
-    for r in risks_200:
-        try:
-            scores.append(int(r.score) if r.score is not None else None)
-        except Exception:
-            scores.append(None)
-    scores_clean = [s for s in scores if isinstance(s, int)]
+    # Distribuição (High/Medium/Low)
+    bucket = _bucket_case(Risk.score)
+    dist_rows = (
+        db.query(bucket.label("bucket"), func.count(Risk.id).label("count"))
+        .filter(Risk.created_at >= start)
+    )
+    dist_rows = _apply_entity_scope(dist_rows, u, entity_id)
+    dist_rows = dist_rows.group_by("bucket").all()
 
-    avg_score = int(round(sum(scores_clean) / len(scores_clean))) if scores_clean else 0
-    high = len([s for s in scores_clean if s >= 80])
-    med = len([s for s in scores_clean if 60 <= s < 80])
-    low = len([s for s in scores_clean if s < 60])
+    distribution = {"High": 0, "Medium": 0, "Low": 0}
+    for r in dist_rows:
+        distribution[str(r.bucket)] = int(r.count)
 
-    # Últimos riscos (top 10)
-    latest_risks = []
-    for r in risks_200[:10]:
-        latest_risks.append(
-            {
-                "id": r.id,
-                "name": r.query_name,
-                "score": r.score,
-                "status": getattr(r.status, "value", str(r.status)),
-                "entity_id": r.entity_id,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
+    # Últimas análises (para tabela)
+    last_risks = (
+        db.query(
+            Risk.id,
+            Risk.name,
+            Risk.score,
+            Risk.status,
+            Risk.entity_id,
+            Risk.created_at,
         )
+        .filter(Risk.created_at >= start)
+    )
+    last_risks = _apply_entity_scope(last_risks, u, entity_id)
+    last_risks = last_risks.order_by(Risk.created_at.desc()).limit(10).all()
 
-    # Auditoria (top ações + últimos eventos)
-    q_audit = db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(200)
-    if scope_entity_id:
-        # No teu AuditLog tens entity_id opcional. Se for sempre preenchido, ótimo.
-        # Se não for, isto ainda funciona para eventos que registram entity_id.
-        q_audit = q_audit.filter(AuditLog.entity_id == scope_entity_id)
-    audit_200 = q_audit.all()
+    last_analyses = [
+        {
+            "id": str(r.id),
+            "name": r.name,
+            "score": int(r.score or 0),
+            "status": getattr(r, "status", None),
+            "entity_id": str(r.entity_id) if r.entity_id else None,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in last_risks
+    ]
 
-    # top actions
-    q_top = db.query(AuditLog.action, func.count(AuditLog.id)).group_by(AuditLog.action)
-    if scope_entity_id:
-        q_top = q_top.filter(AuditLog.entity_id == scope_entity_id)
-    top_actions_rows = q_top.order_by(func.count(AuditLog.id).desc()).limit(6).all()
+    # Top auditoria por ação no período
+    audit_q = (
+        db.query(AuditLog.action.label("action"), func.count(AuditLog.id).label("count"))
+        .filter(AuditLog.created_at >= start)
+    )
+    audit_q = _apply_entity_scope_audit(audit_q, u, entity_id)
+    audit_top = audit_q.group_by(AuditLog.action).order_by(func.count(AuditLog.id).desc()).limit(7).all()
 
-    top_actions = [{"action": a, "count": int(c)} for a, c in top_actions_rows]
-
-    latest_events = []
-    for a in audit_200[:6]:
-        latest_events.append(
-            {
-                "id": a.id,
-                "action": a.action,
-                "actor_name": a.actor_name,
-                "entity_id": a.entity_id,
-                "entity_name": a.entity_name,
-                "target_ref": a.target_ref,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-            }
-        )
-
-    # Série 30 dias (para Recharts)
-    # Usamos DATE(created_at) para agrupar por dia.
-    now = datetime.now(timezone.utc)
-    start = now - timedelta(days=30)
-
-    q_series = db.query(
-        func.date(Risk.created_at).label("d"),
-        func.count(Risk.id).label("c"),
-    ).filter(Risk.created_at >= start)
-
-    q_series = _apply_entity_filter(q_series, Risk.entity_id)
-    q_series = q_series.group_by(func.date(Risk.created_at)).order_by(func.date(Risk.created_at)).all()
-
-    series_30d = [{"date": str(d), "count": int(c)} for d, c in q_series]
+    audit_top_actions = [{"action": str(a.action), "count": int(a.count)} for a in audit_top]
 
     return {
-        "scope_entity_id": scope_entity_id,  # útil para debug no frontend
-        "entities": entities_count,
-        "users": users_count,
-        "sources": sources_count,
-        "risks_total": risks_total,
-        "risks_last_200": len(risks_200),
-        "score_avg": avg_score,
-        "score_high": high,
-        "score_med": med,
-        "score_low": low,
-        "latest_risks": latest_risks,
-        "top_actions": top_actions,
-        "latest_events": latest_events,
-        "series_30d": series_30d,
+        "period": period,
+        "entity_id": entity_id,
+        "kpis": {
+            "entities": int(entities_count),
+            "users": int(users_count),
+            "sources": int(sources_count),
+            "analyses": int(analyses_count),
+            "avg_score": round(avg_score_val, 2),
+            "distribution": distribution,
+        },
+        "last_analyses": last_analyses,
+        "audit_top_actions": audit_top_actions,
     }
+
+
+@router.get("/distribution")
+def dashboard_distribution(
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("dashboard:read")),
+    period: Period = Query("30d"),
+    entity_id: Optional[str] = Query(None),
+) -> List[Dict[str, Any]]:
+    start = _period_start(period)
+    bucket = _bucket_case(Risk.score)
+
+    q = (
+        db.query(bucket.label("bucket"), func.count(Risk.id).label("count"))
+        .filter(Risk.created_at >= start)
+    )
+    q = _apply_entity_scope(q, u, entity_id)
+    rows = q.group_by("bucket").all()
+
+    base = {"High": 0, "Medium": 0, "Low": 0}
+    for r in rows:
+        base[str(r.bucket)] = int(r.count)
+
+    return [
+        {"bucket": "High", "count": base["High"]},
+        {"bucket": "Medium", "count": base["Medium"]},
+        {"bucket": "Low", "count": base["Low"]},
+    ]
+
+
+@router.get("/trends")
+def dashboard_trends(
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("dashboard:read")),
+    period: Period = Query("30d"),
+    entity_id: Optional[str] = Query(None),
+    granularity: Granularity = Query("day"),
+) -> List[Dict[str, Any]]:
+    start = _period_start(period)
+
+    # Postgres: date_trunc('day'|'week', timestamp)
+    trunc_unit = "day" if granularity == "day" else "week"
+    date_key = func.date_trunc(trunc_unit, Risk.created_at).label("date")
+
+    q = (
+        db.query(
+            date_key,
+            func.avg(Risk.score).label("avg_score"),
+            func.count(Risk.id).label("count"),
+        )
+        .filter(Risk.created_at >= start)
+    )
+    q = _apply_entity_scope(q, u, entity_id)
+    q = q.group_by(date_key).order_by(date_key.asc())
+
+    rows = q.all()
+
+    return [
+        {
+            "date": (r.date.isoformat() if hasattr(r.date, "isoformat") else str(r.date)),
+            "avg_score": round(float(r.avg_score or 0.0), 2),
+            "count": int(r.count or 0),
+        }
+        for r in rows
+    ]
