@@ -241,6 +241,59 @@ def build_risk_pdf_institutional(
         )
         return t
 
+    # ============================================================
+    # Compliance evidence helpers (campos por fontes)
+    # ============================================================
+    def _pick(d: dict, *keys: str, default: str = "N/D") -> str:
+        for k in keys:
+            v = d.get(k, None)
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s:
+                return s
+        return default
+
+    def _pick_int(d: dict, *keys: str, default: int = 0) -> int:
+        for k in keys:
+            v = d.get(k, None)
+            try:
+                if v is None:
+                    continue
+                return int(v)
+            except Exception:
+                continue
+        return default
+
+    # usa a mesma "tbl" para manter look&feel
+    def _render_source_evidence(src: str, hits: List[dict], max_rows: int = 5) -> List[Any]:
+        block: List[Any] = []
+        block.append(Paragraph(f"Fonte: <b>{_safe(src, 80)}</b>", H3))
+
+        if not hits:
+            block.append(Paragraph("Sem evidências a apresentar (0 registos).", BODY))
+            block.append(Spacer(1, 3))
+            return block
+
+        rows = [["#", "Nome/Entidade", "Score", "Ref.", "Nota/Descrição"]]
+        for i, h in enumerate((hits or [])[:max_rows], 1):
+            if not isinstance(h, dict):
+                h = {"value": h}
+
+            name = _pick(h, "matched_name", "name", "full_name", "entity_name", "value")
+            score = _pick_int(h, "match_score", "score", "similarity", default=0)
+            refid = _pick(h, "list_id", "uid", "external_id", "id", "source_ref", "reference")
+            note = _pick(h, "reason", "note", "description", "details", "summary")
+
+            rows.append([str(i), _safe(name, 60), str(score), _safe(refid, 40), _safe(note, 90)])
+
+        block.append(tbl(rows, col_widths=[8 * mm, 55 * mm, 14 * mm, 25 * mm, 71 * mm]))
+        block.append(Spacer(1, 4))
+        return block
+
+    # ============================================================
+    # Data prep
+    # ============================================================
     score = getattr(risk, "score", None)
     score_i = _score_to_int(score)
     band, review_level = _score_band(score)
@@ -370,17 +423,24 @@ def build_risk_pdf_institutional(
             story.append(Spacer(1, 4))
             return
 
+        # resumo por fonte (mantém look&feel)
         rows = [["Fonte", "Qtd. registos", "Top score"]]
         for src, hits in by_source.items():
             top = 0
             for h in hits or []:
                 try:
-                    top = max(top, int(h.get("match_score", 0) or 0))
+                    top = max(top, int((h or {}).get("match_score", 0) or 0))
                 except Exception:
                     pass
             rows.append([_safe(src, 60), str(len(hits or [])), str(top)])
+
         story.append(tbl(rows, col_widths=[90 * mm, 35 * mm, 40 * mm]))
-        story.append(Spacer(1, 5))
+        story.append(Spacer(1, 4))
+
+        # NOVO: evidências por fonte (amostra)
+        story.append(Paragraph("Evidências por fonte (amostra)", H3))
+        for src, hits in by_source.items():
+            story.append(KeepTogether(_render_source_evidence(str(src), hits or [], max_rows=5)))
 
     _render_category("2.1 PEP", comp.get("PEP") or {})
     _render_category("2.2 Sanções", comp.get("SANCTIONS") or {})
