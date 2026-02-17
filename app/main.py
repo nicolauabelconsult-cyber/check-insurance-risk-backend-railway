@@ -49,12 +49,13 @@ def create_app() -> FastAPI:
     if not cors_origins:
         cors_origins = ["*"]
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+  app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
     )
 
     # ---------- Endpoints base ----------
