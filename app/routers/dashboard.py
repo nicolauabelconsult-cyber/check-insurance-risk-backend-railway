@@ -102,11 +102,10 @@ def dashboard_summary(
     # KPIs base
     # -----------------------------
     # Entidades
-    entities_q = db.query(func.count(Entity.id))
     if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
         entities_count = 1 if getattr(u, "entity_id", None) else 0
     else:
-        entities_count = entities_q.scalar() or 0
+        entities_count = db.query(func.count(Entity.id)).scalar() or 0
         if entity_id:
             entities_count = 1
 
@@ -114,11 +113,10 @@ def dashboard_summary(
     users_q = db.query(func.count(User.id))
     if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
         users_q = users_q.filter(User.entity_id == u.entity_id)
-        users_count = users_q.scalar() or 0
     else:
         if entity_id:
             users_q = users_q.filter(User.entity_id == entity_id)
-        users_count = users_q.scalar() or 0
+    users_count = users_q.scalar() or 0
 
     # Fontes
     sources_q = db.query(func.count(Source.id))
@@ -134,8 +132,8 @@ def dashboard_summary(
     risks_total_q = _apply_entity_scope_risk(risks_total_q, u, entity_id)
     risks_total = risks_total_q.scalar() or 0
 
-    # Risks no período (para KPIs do período)
-    risks_period_q = db.query(Risk).filter(Risk.created_at >= start)
+    # Risks no período (para KPIs)
+    risks_period_q = db.query(Risk.id).filter(Risk.created_at >= start)
     risks_period_q = _apply_entity_scope_risk(risks_period_q, u, entity_id)
     analyses_count = risks_period_q.count()
 
@@ -148,9 +146,8 @@ def dashboard_summary(
 
     # Distribuição High/Medium/Low no período
     bucket = _bucket_case(score_num)
-    dist_q = (
-        db.query(bucket.label("bucket"), func.count(Risk.id).label("count"))
-        .filter(Risk.created_at >= start)
+    dist_q = db.query(bucket.label("bucket"), func.count(Risk.id).label("count")).filter(
+        Risk.created_at >= start
     )
     dist_q = _apply_entity_scope_risk(dist_q, u, entity_id)
     dist_rows = dist_q.group_by("bucket").all()
@@ -162,26 +159,24 @@ def dashboard_summary(
     # -----------------------------
     # Últimas análises (tabela)
     # -----------------------------
-    # ⚠️ Risk NÃO tem "name". O campo correto é query_name.
-    last_q = (
-        db.query(
-            Risk.id,
-            Risk.query_name,
-            Risk.score,
-            Risk.status,
-            Risk.entity_id,
-            Risk.created_at,
-        )
-        .filter(Risk.created_at >= start)
-    )
+    # Risk NÃO tem "name". Campo correto: query_name.
+    last_q = db.query(
+        Risk.id,
+        Risk.query_name,
+        Risk.score,
+        Risk.status,
+        Risk.entity_id,
+        Risk.created_at,
+    ).filter(Risk.created_at >= start)
+
     last_q = _apply_entity_scope_risk(last_q, u, entity_id)
     last_rows = last_q.order_by(Risk.created_at.desc()).limit(10).all()
 
     last_analyses = [
         {
             "id": str(r.id),
-            "name": r.query_name,          # <- devolvemos como "name" para compatibilidade do frontend
-            "score": r.score,              # mantém string como no teu sistema
+            "name": r.query_name,  # devolvemos como "name" para o frontend
+            "score": r.score,
             "status": str(r.status) if r.status is not None else None,
             "entity_id": str(r.entity_id) if r.entity_id else None,
             "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -192,10 +187,11 @@ def dashboard_summary(
     # -----------------------------
     # Top auditoria por ação (período)
     # -----------------------------
-    audit_q = (
-        db.query(AuditLog.action.label("action"), func.count(AuditLog.id).label("count"))
-        .filter(AuditLog.created_at >= start)
-    )
+    audit_q = db.query(
+        AuditLog.action.label("action"),
+        func.count(AuditLog.id).label("count"),
+    ).filter(AuditLog.created_at >= start)
+
     audit_q = _apply_entity_scope_audit(audit_q, u, entity_id)
     audit_top = (
         audit_q.group_by(AuditLog.action)
@@ -234,6 +230,53 @@ def dashboard_distribution(
     score_num = _score_num()
     bucket = _bucket_case(score_num)
 
-    q = (
-        db.query(bucket.label("bucket"), func.count(Risk.id).label("count"))
-        .filter(Risk.c
+    q = db.query(bucket.label("bucket"), func.count(Risk.id).label("count")).filter(
+        Risk.created_at >= start
+    )
+    q = _apply_entity_scope_risk(q, u, entity_id)
+    rows = q.group_by("bucket").all()
+
+    base = {"High": 0, "Medium": 0, "Low": 0}
+    for r in rows:
+        base[str(r.bucket)] = int(r.count)
+
+    return [
+        {"bucket": "High", "count": base["High"]},
+        {"bucket": "Medium", "count": base["Medium"]},
+        {"bucket": "Low", "count": base["Low"]},
+    ]
+
+
+@router.get("/trends")
+def dashboard_trends(
+    db: Session = Depends(get_db),
+    u: User = Depends(require_perm("dashboard:read")),
+    period: Period = Query("30d"),
+    entity_id: Optional[str] = Query(None),
+    granularity: Granularity = Query("day"),
+) -> List[Dict[str, Any]]:
+    start = _period_start(period)
+
+    trunc_unit = "day" if granularity == "day" else "week"
+    date_key = func.date_trunc(trunc_unit, Risk.created_at).label("date")
+
+    score_num = _score_num()
+
+    q = db.query(
+        date_key,
+        func.avg(score_num).label("avg_score"),
+        func.count(Risk.id).label("count"),
+    ).filter(Risk.created_at >= start)
+
+    q = _apply_entity_scope_risk(q, u, entity_id)
+    q = q.group_by(date_key).order_by(date_key.asc())
+    rows = q.all()
+
+    return [
+        {
+            "date": (r.date.isoformat() if hasattr(r.date, "isoformat") else str(r.date)),
+            "avg_score": round(float(r.avg_score or 0.0), 2),
+            "count": int(r.count or 0),
+        }
+        for r in rows
+    ]
