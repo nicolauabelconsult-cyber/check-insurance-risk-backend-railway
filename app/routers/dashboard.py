@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Literal, Dict, Any, List
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import func, case
+from sqlalchemy import func, case, cast, Float
 from sqlalchemy.orm import Session
 
 from app.deps import get_db, require_perm
@@ -29,16 +29,35 @@ def _period_start(period: Period) -> datetime:
         return now - timedelta(days=30)
     if period == "90d":
         return now - timedelta(days=90)
-    # 12m ~ 365d (suficientemente bom para dashboard executivo)
-    return now - timedelta(days=365)
+    return now - timedelta(days=365)  # 12m ~ 365d
 
 
-def _bucket_case(score_col):
-    # Ajusta os thresholds se a tua política interna for outra
-    # Aqui: High >= 80, Medium >= 50, Low < 50
+def _score_num():
+    """
+    Cast seguro do score para número.
+
+    - Se score for numérico (ex: "78" ou "78.5"), converte para Float
+    - Se não for numérico (ex: "N/A"), devolve NULL (avg ignora NULL)
+    """
+    is_numeric = Risk.score.op("~")(r"^\s*\d+(\.\d+)?\s*$")  # regex postgres
     return case(
-        (score_col >= 80, "High"),
-        (score_col >= 50, "Medium"),
+        (is_numeric, cast(func.trim(Risk.score), Float)),
+        else_=None,
+    )
+
+
+def _bucket_case(score_num_col):
+    """
+    Buckets:
+    - High >= 80
+    - Medium >= 50
+    - Low < 50
+    Observação: score inválido -> NULL -> coalesce para 0 -> Low
+    """
+    score_for_bucket = func.coalesce(score_num_col, 0.0)
+    return case(
+        (score_for_bucket >= 80, "High"),
+        (score_for_bucket >= 50, "Medium"),
         else_="Low",
     )
 
@@ -54,7 +73,6 @@ def _apply_entity_scope(q, user: User, entity_id: Optional[str]):
             return q.filter(Risk.entity_id == entity_id)
         return q
 
-    # CLIENT_*: força entity_id do user
     if not getattr(user, "entity_id", None):
         raise HTTPException(status_code=403, detail="Entity scope missing for this user")
     return q.filter(Risk.entity_id == user.entity_id)
@@ -85,12 +103,11 @@ def dashboard_summary(
     # Entidades
     entities_q = db.query(func.count(Entity.id))
     if u.role not in (UserRole.SUPER_ADMIN, UserRole.ADMIN):
-        # para clientes, "entidades" é 1 (a sua)
         entities_count = 1 if getattr(u, "entity_id", None) else 0
     else:
         entities_count = entities_q.scalar() or 0
         if entity_id:
-            entities_count = 1  # está a filtrar uma entidade específica
+            entities_count = 1
 
     # Utilizadores
     users_q = db.query(func.count(User.id))
@@ -114,33 +131,30 @@ def dashboard_summary(
     # Análises no período (Risk)
     risks_q = db.query(Risk).filter(Risk.created_at >= start)
     risks_q = _apply_entity_scope(risks_q, u, entity_id)
-
     analyses_count = risks_q.count()
 
-    # Score médio no período
-    avg_score = (
-        db.query(func.avg(Risk.score))
-        .filter(Risk.created_at >= start)
-    )
-    avg_score = _apply_entity_scope(avg_score, u, entity_id)
-    avg_score_val = avg_score.scalar()
+    # Score médio no período (CAST seguro)
+    score_num = _score_num()
+    avg_score_q = db.query(func.avg(score_num)).filter(Risk.created_at >= start)
+    avg_score_q = _apply_entity_scope(avg_score_q, u, entity_id)
+    avg_score_val = avg_score_q.scalar()
     avg_score_val = float(avg_score_val) if avg_score_val is not None else 0.0
 
     # Distribuição (High/Medium/Low)
-    bucket = _bucket_case(Risk.score)
-    dist_rows = (
+    bucket = _bucket_case(score_num)
+    dist_q = (
         db.query(bucket.label("bucket"), func.count(Risk.id).label("count"))
         .filter(Risk.created_at >= start)
     )
-    dist_rows = _apply_entity_scope(dist_rows, u, entity_id)
-    dist_rows = dist_rows.group_by("bucket").all()
+    dist_q = _apply_entity_scope(dist_q, u, entity_id)
+    dist_rows = dist_q.group_by("bucket").all()
 
     distribution = {"High": 0, "Medium": 0, "Low": 0}
     for r in dist_rows:
         distribution[str(r.bucket)] = int(r.count)
 
     # Últimas análises (para tabela)
-    last_risks = (
+    last_q = (
         db.query(
             Risk.id,
             Risk.name,
@@ -151,19 +165,19 @@ def dashboard_summary(
         )
         .filter(Risk.created_at >= start)
     )
-    last_risks = _apply_entity_scope(last_risks, u, entity_id)
-    last_risks = last_risks.order_by(Risk.created_at.desc()).limit(10).all()
+    last_q = _apply_entity_scope(last_q, u, entity_id)
+    last_rows = last_q.order_by(Risk.created_at.desc()).limit(10).all()
 
     last_analyses = [
         {
             "id": str(r.id),
             "name": r.name,
-            "score": int(r.score or 0),
+            "score": r.score,  # mantém como está no teu sistema (string)
             "status": getattr(r, "status", None),
             "entity_id": str(r.entity_id) if r.entity_id else None,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         }
-        for r in last_risks
+        for r in last_rows
     ]
 
     # Top auditoria por ação no período
@@ -172,7 +186,12 @@ def dashboard_summary(
         .filter(AuditLog.created_at >= start)
     )
     audit_q = _apply_entity_scope_audit(audit_q, u, entity_id)
-    audit_top = audit_q.group_by(AuditLog.action).order_by(func.count(AuditLog.id).desc()).limit(7).all()
+    audit_top = (
+        audit_q.group_by(AuditLog.action)
+        .order_by(func.count(AuditLog.id).desc())
+        .limit(7)
+        .all()
+    )
 
     audit_top_actions = [{"action": str(a.action), "count": int(a.count)} for a in audit_top]
 
@@ -200,7 +219,9 @@ def dashboard_distribution(
     entity_id: Optional[str] = Query(None),
 ) -> List[Dict[str, Any]]:
     start = _period_start(period)
-    bucket = _bucket_case(Risk.score)
+
+    score_num = _score_num()
+    bucket = _bucket_case(score_num)
 
     q = (
         db.query(bucket.label("bucket"), func.count(Risk.id).label("count"))
@@ -230,14 +251,15 @@ def dashboard_trends(
 ) -> List[Dict[str, Any]]:
     start = _period_start(period)
 
-    # Postgres: date_trunc('day'|'week', timestamp)
     trunc_unit = "day" if granularity == "day" else "week"
     date_key = func.date_trunc(trunc_unit, Risk.created_at).label("date")
+
+    score_num = _score_num()
 
     q = (
         db.query(
             date_key,
-            func.avg(Risk.score).label("avg_score"),
+            func.avg(score_num).label("avg_score"),
             func.count(Risk.id).label("count"),
         )
         .filter(Risk.created_at >= start)
