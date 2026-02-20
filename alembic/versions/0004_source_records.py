@@ -1,9 +1,11 @@
+"""Create source_records table"""
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "0004_source_records"
-down_revision = "0003a_merge_uw_br"
+down_revision = "0003_underwriting_fields"
 branch_labels = None
 depends_on = None
 
