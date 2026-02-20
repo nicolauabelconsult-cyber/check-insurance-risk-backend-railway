@@ -16,6 +16,7 @@ from app.routers.audit import router as audit_router
 from app.routers.public import router as public_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.diagnostics import router as diagnostics_router
+from app.routers.sources_upload import router as sources_upload_router
 
 import uuid
 from app.db import SessionLocal
@@ -133,6 +134,7 @@ def create_app() -> FastAPI:
     app.include_router(public_router)
     app.include_router(dashboard_router)
     app.include_router(diagnostics_router)
+    app.include_router(sources_upload_router)
 
     return app
 
