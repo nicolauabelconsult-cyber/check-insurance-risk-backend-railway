@@ -11,6 +11,9 @@ from ..models import Source
 from ..models_source_records import SourceRecord
 from ..services.source_parser_official import parse_official
 
+# IMPORTANTÍSSIMO:
+# - Sem prefix aqui
+# - O caminho abaixo começa com "/sources/..."
 router = APIRouter(tags=["sources"])
 
 
@@ -34,14 +37,13 @@ def upload_source_file(
         raise HTTPException(status_code=400, detail="Fonte sem entity_id/sector.")
 
     content = file.file.read()
-    try:
-        valid, invalid = parse_official(category, file.filename, content)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    valid, invalid = parse_official(category, file.filename, content)
 
+    # reimport limpo
     db.query(SourceRecord).filter(SourceRecord.source_id == str(src.id)).delete()
 
     now = datetime.utcnow()
+
     for r in valid:
         if category in ("PEP", "SANCTIONS"):
             subject = (r.get("full_name") or "").lower().strip()
@@ -53,7 +55,7 @@ def upload_source_file(
         db.add(
             SourceRecord(
                 entity_id=str(entity_id),
-                source_id=str(src.id),  # String, porque sources.id é VARCHAR
+                source_id=str(src.id),  # string
                 category=category,
                 subject_name=subject,
                 country=r.get("country"),
