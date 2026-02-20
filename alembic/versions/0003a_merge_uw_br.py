@@ -1,16 +1,11 @@
-"""Merge underwriting and bridge heads (NO-OP)
+"""Merge heads: underwriting + bridge (NO-OP)
 
-Revision ID: 0003a_merge_uw_br
-Revises: 0003_underwriting_fields, a1c2d3e4f5g6
-Create Date: 2026-02-20
-
-NOTE: This project stores Alembic revision IDs in a varchar(32) column (alembic_version.version_num).
-So revision IDs must be 32 chars or fewer.
+Revision ID: 0003m_uw_bridge
+Revises: 0003_underwriting_fields, a1c2d3e4f5g6_bridge
 """
 
-# revision identifiers, used by Alembic.
-revision = "0003a_merge_uw_br"
-down_revision = ("0003_underwriting_fields", "a1c2d3e4f5g6")
+revision = "0003m_uw_bridge"
+down_revision = ("0003_underwriting_fields", "a1c2d3e4f5g6_bridge")
 branch_labels = None
 depends_on = None
 
