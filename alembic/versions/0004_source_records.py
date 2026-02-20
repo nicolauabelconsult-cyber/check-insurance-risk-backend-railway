@@ -1,9 +1,17 @@
+"""Create source_records table
+
+Revision ID: 0004_source_records
+Revises: 0003a_merge_legacy_and_underwriting
+Create Date: 2026-02-20
+"""
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+# revision identifiers, used by Alembic.
 revision = "0004_source_records"
-down_revision = "0003"  # <-- AJUSTAR
+down_revision = "0003a_merge_legacy_and_underwriting"
 branch_labels = None
 depends_on = None
 
@@ -27,6 +35,7 @@ def upgrade():
     )
 
     op.create_index("ix_source_records_entity_id", "source_records", ["entity_id"])
+    op.create_index("ix_source_records_source_id", "source_records", ["source_id"])
     op.create_index("ix_source_records_category", "source_records", ["category"])
     op.create_index("ix_source_records_subject_name", "source_records", ["subject_name"])
 
@@ -41,5 +50,6 @@ def downgrade():
     op.drop_index("ix_source_records_entity_cat_subject", table_name="source_records")
     op.drop_index("ix_source_records_subject_name", table_name="source_records")
     op.drop_index("ix_source_records_category", table_name="source_records")
+    op.drop_index("ix_source_records_source_id", table_name="source_records")
     op.drop_index("ix_source_records_entity_id", table_name="source_records")
     op.drop_table("source_records")
