@@ -15,25 +15,22 @@ class SourceRecord(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    # Sector = Tenant (modelo atual do sistema)
     entity_id = Column(String, nullable=False, index=True)
 
+    # IMPORTANT: sources.id no teu projeto é String/VARCHAR
     source_id = Column(
-        UUID(as_uuid=True),
+        String,
         ForeignKey("sources.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    # PEP | SANCTIONS | ADVERSE_MEDIA | WATCHLIST
     category = Column(String, nullable=False, index=True)
 
-    # nome normalizado para matching rápido
     subject_name = Column(String, nullable=False, index=True)
 
     country = Column(String, nullable=True)
 
-    # registo completo conforme CSV oficial
     raw = Column(JSONB, nullable=False)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
