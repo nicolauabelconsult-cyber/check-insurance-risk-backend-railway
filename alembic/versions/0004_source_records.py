@@ -15,12 +15,15 @@ def upgrade():
         "source_records",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("entity_id", sa.String(), nullable=False),
+
+        # IMPORTANT: sources.id no teu projeto é VARCHAR, então aqui também tem de ser String
         sa.Column(
             "source_id",
-            postgresql.UUID(as_uuid=True),
+            sa.String(),
             sa.ForeignKey("sources.id", ondelete="CASCADE"),
             nullable=False,
         ),
+
         sa.Column("category", sa.String(), nullable=False),
         sa.Column("subject_name", sa.String(), nullable=False),
         sa.Column("country", sa.String(), nullable=True),
