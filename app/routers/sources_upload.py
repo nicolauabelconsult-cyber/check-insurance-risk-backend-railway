@@ -1,75 +1,47 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import Column, String, DateTime, ForeignKey, Index
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship
 
-from ..db import get_db
-from ..deps import require_perm
-from ..models import Source
-from ..models_source_records import SourceRecord
-from ..services.source_parser_official import parse_official
-
-# IMPORTANTÍSSIMO:
-# - Sem prefix aqui
-# - O caminho abaixo começa com "/sources/..."
-router = APIRouter(tags=["sources"])
+# ✅ O teu projeto usa app/db.py (não app/database.py)
+from app.db import Base
 
 
-@router.post("/sources/{source_id}/upload")
-def upload_source_file(
-    source_id: str,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    user=Depends(require_perm("sources:update")),
-):
-    src = db.query(Source).filter(Source.id == source_id).first()
-    if not src:
-        raise HTTPException(status_code=404, detail="Fonte não encontrada")
+class SourceRecord(Base):
+    __tablename__ = "source_records"
 
-    category = (getattr(src, "category", None) or "").upper().strip()
-    if category not in ("PEP", "SANCTIONS", "ADVERSE_MEDIA", "WATCHLIST"):
-        raise HTTPException(status_code=400, detail="Fonte sem categoria válida.")
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    entity_id = getattr(src, "entity_id", None) or getattr(src, "sector", None)
-    if not entity_id:
-        raise HTTPException(status_code=400, detail="Fonte sem entity_id/sector.")
+    entity_id = Column(String, nullable=False, index=True)
 
-    content = file.file.read()
-    valid, invalid = parse_official(category, file.filename, content)
+    # sources.id é VARCHAR no teu sistema (por isso aqui é String)
+    source_id = Column(
+        String,
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
 
-    # reimport limpo
-    db.query(SourceRecord).filter(SourceRecord.source_id == str(src.id)).delete()
+    category = Column(String, nullable=False, index=True)
 
-    now = datetime.utcnow()
+    subject_name = Column(String, nullable=False, index=True)
 
-    for r in valid:
-        if category in ("PEP", "SANCTIONS"):
-            subject = (r.get("full_name") or "").lower().strip()
-        elif category == "ADVERSE_MEDIA":
-            subject = (r.get("subject_name") or "").lower().strip()
-        else:
-            subject = (r.get("entity_name") or "").lower().strip()
+    country = Column(String, nullable=True)
 
-        db.add(
-            SourceRecord(
-                entity_id=str(entity_id),
-                source_id=str(src.id),  # string
-                category=category,
-                subject_name=subject,
-                country=r.get("country"),
-                raw=r,
-                created_at=now,
-            )
-        )
+    raw = Column(JSONB, nullable=False)
 
-    db.commit()
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
-    return {
-        "source_id": str(src.id),
-        "category": category,
-        "imported": len(valid),
-        "invalid": len(invalid),
-        "invalid_rows": invalid[:20],
-    }
+    source = relationship("Source", backref="records")
+
+
+Index(
+    "ix_source_records_entity_cat_subject",
+    SourceRecord.entity_id,
+    SourceRecord.category,
+    SourceRecord.subject_name,
+)
