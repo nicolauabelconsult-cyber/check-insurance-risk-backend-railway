@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "0004_source_records"
-down_revision = "0003_underwriting_fields"
+down_revision = "0003m_uw_bridge"
 branch_labels = None
 depends_on = None
 
@@ -29,6 +29,7 @@ def upgrade():
     )
 
     op.create_index("ix_source_records_entity_id", "source_records", ["entity_id"])
+    op.create_index("ix_source_records_source_id", "source_records", ["source_id"])
     op.create_index("ix_source_records_category", "source_records", ["category"])
     op.create_index("ix_source_records_subject_name", "source_records", ["subject_name"])
 
@@ -43,5 +44,6 @@ def downgrade():
     op.drop_index("ix_source_records_entity_cat_subject", table_name="source_records")
     op.drop_index("ix_source_records_subject_name", table_name="source_records")
     op.drop_index("ix_source_records_category", table_name="source_records")
+    op.drop_index("ix_source_records_source_id", table_name="source_records")
     op.drop_index("ix_source_records_entity_id", table_name="source_records")
     op.drop_table("source_records")
