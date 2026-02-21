@@ -131,7 +131,7 @@ class RiskSearchIn(BaseModel):
     nationality: str | None = None
 
 
-class CandidateOut(BaseModel):class CandidateOut(BaseModel):
+class CandidateOut(BaseModel):
     id: str
     full_name: str
     nationality: Optional[str] = None
