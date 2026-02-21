@@ -134,6 +134,13 @@ def _institutional_summary(score: Any, pep: int, sanc: int, watch: int, adv: int
         lines.append("Foram identificadas correspondências PEP, recomendando diligência reforçada (EDD) e validação documental.")
     else:
         lines.append("Não foram identificadas correspondências críticas em sanções/PEP com base nos dados disponíveis.")
+
+    # detalhe por categoria (para transparência institucional)
+    lines.append(f"PEP: {pep} correspondência(s)." if pep > 0 else "PEP: sem correspondência.")
+    lines.append(f"Sanções: {sanc} correspondência(s)." if sanc > 0 else "Sanções: sem correspondência.")
+    lines.append(f"Watchlists: {watch} correspondência(s)." if watch > 0 else "Watchlists: sem correspondência.")
+    lines.append(f"Adverse Media: {adv} correspondência(s)." if adv > 0 else "Adverse Media: sem correspondência.")
+
     if watch > 0:
         lines.append("Foram observadas correspondências em watchlists, recomendando verificação contextual.")
     if adv > 0:
@@ -212,116 +219,87 @@ def build_risk_pdf_institutional(
                     ("BACKGROUND", (0, 0), (-1, 0), header_bg),
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, 0), 9),
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 5),
-                    ("TOPPADDING", (0, 0), (-1, 0), 5),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
-                    ("FONTSIZE", (0, 1), (-1, -1), 8),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8.6),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D6DBE1")),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHT]),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.white),
                     ("LEFTPADDING", (0, 0), (-1, -1), 6),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
                 ]
             )
         )
         return t
 
     def badge(text: str) -> Table:
-        t = Table([[Paragraph(f"<b>{_safe(text, 180)}</b>", ParagraphStyle("BADGE", parent=BODY, textColor=colors.white))]])
+        t = Table([[text]], colWidths=[170 * mm])
         t.setStyle(
             TableStyle(
                 [
-                    ("BACKGROUND", (0, 0), (-1, -1), BRAND),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 9),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 9),
-                    ("TOPPADDING", (0, 0), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("BACKGROUND", (0, 0), (0, 0), BRAND),
+                    ("TEXTCOLOR", (0, 0), (0, 0), colors.white),
+                    ("FONTNAME", (0, 0), (0, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (0, 0), 9.2),
+                    ("ALIGN", (0, 0), (0, 0), "CENTER"),
+                    ("VALIGN", (0, 0), (0, 0), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (0, 0), 8),
+                    ("RIGHTPADDING", (0, 0), (0, 0), 8),
+                    ("TOPPADDING", (0, 0), (0, 0), 6),
+                    ("BOTTOMPADDING", (0, 0), (0, 0), 6),
                 ]
             )
         )
         return t
 
-    # ============================================================
-    # Compliance evidence helpers (campos por fontes)
-    # ============================================================
-    def _pick(d: dict, *keys: str, default: str = "N/D") -> str:
-        for k in keys:
-            v = d.get(k, None)
-            if v is None:
-                continue
-            s = str(v).strip()
-            if s:
-                return s
-        return default
+    def _render_source_evidence(source_name: str, hits: List[dict], max_rows: int = 6) -> Table:
+        rows = [["Campo", "Valor"]]
+        take = hits[:max_rows]
+        for h in take:
+            # tentar mostrar campo mais útil (flex)
+            nm = h.get("full_name") or h.get("name") or h.get("subject") or h.get("value") or ""
+            doc = h.get("doc") or h.get("id_number") or h.get("passport") or h.get("bi") or ""
+            score = h.get("match_score") or h.get("score") or 0
+            rows.append(["Nome", _safe(nm, 120)])
+            if doc:
+                rows.append(["Documento", _safe(doc, 120)])
+            rows.append(["Score", _safe(score, 20)])
+            rows.append(["---", "---"])
+        rows = rows[:-1] if rows and rows[-1] == ["---", "---"] else rows
 
-    def _pick_int(d: dict, *keys: str, default: int = 0) -> int:
-        for k in keys:
-            v = d.get(k, None)
-            try:
-                if v is None:
-                    continue
-                return int(v)
-            except Exception:
-                continue
-        return default
+        t = Table(rows, colWidths=[35 * mm, 135 * mm], hAlign="LEFT")
+        t.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#122B52")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8.3),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D6DBE1")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ]
+            )
+        )
+        return KeepTogether([Paragraph(f"Fonte: <b>{_safe(source_name, 80)}</b>", H3), Spacer(1, 2), t, Spacer(1, 4)])
 
-    # usa a mesma "tbl" para manter look&feel
-    def _render_source_evidence(src: str, hits: List[dict], max_rows: int = 5) -> List[Any]:
-        block: List[Any] = []
-        block.append(Paragraph(f"Fonte: <b>{_safe(src, 80)}</b>", H3))
+    # ---------------- Inputs ----------------
+    comp = compliance_by_category or _normalize_matches_generic(getattr(risk, "matches", None))
+    uw = underwriting_by_product or {}
 
-        if not hits:
-            block.append(Paragraph("Sem evidências a apresentar (0 registos).", BODY))
-            block.append(Spacer(1, 3))
-            return block
-
-        rows = [["#", "Nome/Entidade", "Score", "Ref.", "Nota/Descrição"]]
-        for i, h in enumerate((hits or [])[:max_rows], 1):
-            if not isinstance(h, dict):
-                h = {"value": h}
-
-            name = _pick(h, "matched_name", "name", "full_name", "entity_name", "value")
-            score = _pick_int(h, "match_score", "score", "similarity", default=0)
-            refid = _pick(h, "list_id", "uid", "external_id", "id", "source_ref", "reference")
-            note = _pick(h, "reason", "note", "description", "details", "summary")
-
-            rows.append([str(i), _safe(name, 60), str(score), _safe(refid, 40), _safe(note, 90)])
-
-        block.append(tbl(rows, col_widths=[8 * mm, 55 * mm, 14 * mm, 25 * mm, 71 * mm]))
-        block.append(Spacer(1, 4))
-        return block
-
-    # ============================================================
-    # Data prep
-    # ============================================================
+    pep_count, sanc_count, watch_count, adv_count = _counts_from_compliance(comp)
     score = getattr(risk, "score", None)
     score_i = _score_to_int(score)
-    band, review_level = _score_band(score)
+    fraud_flags = 0
+    decision, reasons = _decision_policy(score, pep_count, sanc_count, fraud_flags)
 
-    comp = compliance_by_category or _normalize_matches_generic(getattr(risk, "matches", None) or [])
-    pep_count, sanc_count, watch_count, adv_count = _counts_from_compliance(comp)
+    exec_summary = _institutional_summary(score, pep_count, sanc_count, watch_count, adv_count, bool(uw))
 
-    uw = underwriting_by_product or {}
-    has_uw = bool(uw)
-
-    fraud_flags_count = 0
-    try:
-        for _pt, pack in (uw or {}).items():
-            fraud_flags_count += len((pack or {}).get("fraud_flags", []) or [])
-    except Exception:
-        fraud_flags_count = 0
-
-    decision, reasons = _decision_policy(score, pep_count, sanc_count, fraud_flags_count)
-    exec_summary = _institutional_summary(score, pep_count, sanc_count, watch_count, adv_count, has_uw)
-
-    search_id = (
-        getattr(risk, "search_id", None)
-        or getattr(risk, "search_reference", None)
-        or getattr(risk, "reference", None)
-        or getattr(risk, "id", "")
-    )
-    search_id = str(search_id)
-
+    # ---------------- Document ----------------
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf,
@@ -329,26 +307,33 @@ def build_risk_pdf_institutional(
         leftMargin=18 * mm,
         rightMargin=18 * mm,
         topMargin=16 * mm,
-        bottomMargin=16 * mm,
+        bottomMargin=14 * mm,
         title=report_title,
         author="Check Insurance Risk",
     )
 
     story: List[Any] = []
 
-    # ============================================================
-    # CAPA EXECUTIVA
-    # ============================================================
-    story.append(Paragraph("CHECK INSURANCE RISK", H0))
-    story.append(Paragraph(report_title, H1))
-    story.append(Spacer(1, 4))
+    # Cover
+    story.append(Paragraph(report_title, H0))
+    story.append(Spacer(1, 2))
+    story.append(Paragraph("KYC | AML | PEP | Due Diligence", SMALL))
+    story.append(Spacer(1, 8))
+
+    name = _safe(getattr(risk, "query_name", ""), 120)
+    nationality = _safe(getattr(risk, "query_nationality", ""), 60)
+    bi = _safe(getattr(risk, "query_bi", ""), 60)
+    passport = _safe(getattr(risk, "query_passport", ""), 60)
+    entity_id = _safe(getattr(risk, "entity_id", ""), 80)
+    search_id = _safe(getattr(risk, "search_id", ""), 80)
 
     person_rows = [
-        ["Campo", "Valor"],
-        ["Nome", _safe(getattr(risk, "query_name", ""), 140)],
-        ["Nacionalidade", _safe(getattr(risk, "query_nationality", ""), 80)],
-        ["BI", _safe(getattr(risk, "query_bi", ""), 80)],
-        ["Passaporte", _safe(getattr(risk, "query_passport", ""), 80)],
+        ["Identificação", ""],
+        ["Nome", name],
+        ["Nacionalidade", nationality],
+        ["BI", bi],
+        ["Passaporte", passport],
+        ["Entidade (tenant)", entity_id],
         ["Data da análise (UTC)", generated_at.strftime("%Y-%m-%d %H:%M:%S %Z")],
         ["ID da Pesquisa", _safe(search_id, 80)],
     ]
@@ -362,7 +347,7 @@ def build_risk_pdf_institutional(
         tbl(
             [
                 ["Score", "Nível", "Nível de Revisão", "PEP", "Sanções", "Watchlists", "Adverse Media"],
-                [str(score_i) if score else "N/A", band, review_level, str(pep_count), str(sanc_count), str(watch_count), str(adv_count)],
+                [str(score_i) if score else "N/A", _score_band(score)[0], _score_band(score)[1], str(pep_count), str(sanc_count), str(watch_count), str(adv_count)],
             ],
             col_widths=[16 * mm, 18 * mm, 45 * mm, 16 * mm, 20 * mm, 24 * mm, 25 * mm],
         )
@@ -400,7 +385,6 @@ def build_risk_pdf_institutional(
         rr.append([str(i), _safe(r_, 260)])
     story.append(tbl(rr, col_widths=[10 * mm, 155 * mm]))
 
-    # só quebra se não houver espaço para começar Compliance com “ar”
     story.append(CondPageBreak(25 * mm))
 
     # ============================================================
@@ -419,11 +403,11 @@ def build_risk_pdf_institutional(
     def _render_category(title: str, by_source: Dict[str, List[dict]]) -> None:
         story.append(Paragraph(title, H2))
         if not by_source:
-            story.append(Paragraph("Sem informações a apresentar (sem registos/correspondências disponíveis).", BODY))
+            # ✅ aqui fica explícito que é SEM CORRESPONDÊNCIA nesta categoria
+            story.append(Paragraph("Sem correspondência para os dados pesquisados nesta categoria (0 registos).", BODY))
             story.append(Spacer(1, 4))
             return
 
-        # resumo por fonte (mantém look&feel)
         rows = [["Fonte", "Qtd. registos", "Top score"]]
         for src, hits in by_source.items():
             top = 0
@@ -437,10 +421,9 @@ def build_risk_pdf_institutional(
         story.append(tbl(rows, col_widths=[90 * mm, 35 * mm, 40 * mm]))
         story.append(Spacer(1, 4))
 
-        # NOVO: evidências por fonte (amostra)
         story.append(Paragraph("Evidências por fonte (amostra)", H3))
         for src, hits in by_source.items():
-            story.append(KeepTogether(_render_source_evidence(str(src), hits or [], max_rows=5)))
+            story.append(_render_source_evidence(str(src), hits or [], max_rows=5))
 
     _render_category("2.1 PEP", comp.get("PEP") or {})
     _render_category("2.2 Sanções", comp.get("SANCTIONS") or {})
@@ -448,7 +431,7 @@ def build_risk_pdf_institutional(
     _render_category("2.4 Adverse Media", comp.get("ADVERSE_MEDIA") or {})
 
     # ============================================================
-    # 3) Underwriting / Seguros (SEMPRE, mas sem criar páginas vazias)
+    # 3) Underwriting / Seguros
     # ============================================================
     story.append(CondPageBreak(30 * mm))
     story.append(Paragraph("3) Underwriting / Histórico de Seguros", H1))
@@ -463,7 +446,7 @@ def build_risk_pdf_institutional(
     if not uw:
         story.append(
             Paragraph(
-                "Sem informações de seguros a apresentar (não existem registos disponíveis nas fontes/tabelas atualmente carregadas).",
+                "Sem registos de underwriting a apresentar (0 registos nas fontes/tabelas atualmente carregadas).",
                 BODY,
             )
         )
@@ -507,91 +490,53 @@ def build_risk_pdf_institutional(
                 ["Número total de apólices", str(len(policies))],
                 ["Apólices ativas", str(active_policies)],
                 ["Apólices canceladas", str(cancelled_policies)],
-                ["Total de pagamentos registados", str(len(payments))],
                 ["Pagamentos em atraso", str(late_payments)],
-                ["Número de sinistros", str(len(claims))],
+                ["Sinistros", str(len(claims))],
                 ["Cancelamentos", str(len(cancellations))],
-                ["Indicadores de fraude (fraud flags)", str(len(fraud_flags))],
+                ["Flags de fraude", str(len(fraud_flags))],
             ]
-            block.append(tbl(summary_table, col_widths=[95 * mm, 70 * mm]))
-            block.append(Spacer(1, 4))
-
-            if len(fraud_flags) > 0:
-                observation = "Foram identificados indicadores de risco operacional associados a este produto, recomendando validação adicional e revisão reforçada."
-            elif len(claims) > 0 and late_payments > 0:
-                observation = "O histórico demonstra ocorrência de sinistros e registos pontuais de atraso em pagamentos. Recomenda-se análise contextual adicional."
-            elif len(policies) > 0:
-                observation = "O histórico disponível demonstra comportamento regular, sem indicadores críticos de risco operacional."
-            else:
-                observation = "Não existem eventos relevantes registados para este produto."
-
-            block.append(Paragraph(f"<b>Observação:</b> {observation}", BODY))
+            block.append(tbl(summary_table, col_widths=[75 * mm, 90 * mm], header_bg=colors.HexColor("#122B52")))
             block.append(Spacer(1, 6))
             story.append(KeepTogether(block))
 
     # ============================================================
-    # 4) Metodologia e Limitações
+    # 4) Integridade / Verificação
     # ============================================================
-    story.append(CondPageBreak(35 * mm))
-    story.append(Paragraph("4) Metodologia e Limitações", H1))
+    story.append(CondPageBreak(30 * mm))
+    story.append(Paragraph("4) Integridade e Verificação", H1))
     story.append(
         Paragraph(
-            "A avaliação combina: (i) fontes de compliance (PEP/sanções/watchlists/adverse media), "
-            "(ii) indicadores de underwriting quando disponíveis, e (iii) regras de decisão e classificação de risco. "
-            "Os resultados são indicativos e devem ser confirmados por validação humana e documental.",
+            "O relatório inclui um hash de integridade e uma assinatura do servidor para validação. "
+            "A verificação pode ser efetuada através do endereço indicado (quando disponível).",
             BODY,
         )
     )
-    story.append(Spacer(1, 6))
+    story.append(Spacer(1, 5))
 
-    limits = [
-        "A ausência de correspondências não constitui prova de inexistência de risco.",
-        "Fontes externas podem ter atrasos de atualização e diferenças de cobertura.",
-        "Correspondências aproximadas devem ser validadas manualmente antes de decisão final.",
-        "O relatório não substitui obrigações regulatórias, políticas internas, nem aconselhamento jurídico.",
-    ]
-    lt = [["#", "Limitação"]]
-    for i, t in enumerate(limits, 1):
-        lt.append([str(i), _safe(t, 260)])
-    story.append(tbl(lt, col_widths=[10 * mm, 155 * mm]))
-
-    # ============================================================
-    # 5) Integridade e Verificação
-    # ============================================================
-    story.append(CondPageBreak(35 * mm))
-    story.append(Paragraph("5) Integridade e Verificação", H1))
-    story.append(Paragraph("Este apêndice suporta rastreabilidade e auditoria.", BODY))
-    story.append(Spacer(1, 6))
-
-    integrity_rows = [
+    integ = [
         ["Campo", "Valor"],
-        ["ID da Pesquisa", _safe(search_id, 120)],
-        ["Risk ID (interno)", _safe(getattr(risk, "id", ""), 120)],
-        ["Hash", _safe(integrity_hash, 240)],
-        ["Assinatura do servidor", _safe(server_signature, 240)],
-        ["URL de verificação", _safe(verify_url, 260)],
+        ["Hash de integridade", _safe(integrity_hash, 120)],
+        ["Assinatura do servidor", _safe(server_signature, 120)],
+        ["URL de verificação", _safe(verify_url, 160)],
     ]
-    story.append(tbl(integrity_rows, col_widths=[55 * mm, 110 * mm]))
+    story.append(tbl(integ, col_widths=[45 * mm, 120 * mm], header_bg=colors.HexColor("#122B52")))
     story.append(Spacer(1, 8))
 
-    if qrcode is not None:
+    if qrcode:
         try:
-            from io import BytesIO as _BIO
-            qr_img = qrcode.make(verify_url)
-            qbuf = _BIO()
-            qr_img.save(qbuf, format="PNG")
-            qbuf.seek(0)
-            story.append(Paragraph("QR Code de verificação:", BODY))
-            story.append(Spacer(1, 3))
-            story.append(Image(qbuf, width=28 * mm, height=28 * mm))
+            qr = qrcode.QRCode(box_size=3, border=1)
+            qr.add_data(verify_url)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            from io import BytesIO as _B
+
+            b = _B()
+            img.save(b, format="PNG")
+            b.seek(0)
+            story.append(Paragraph("QR de verificação", H3))
+            story.append(Image(b, width=28 * mm, height=28 * mm))
         except Exception:
-            story.append(Paragraph("QR indisponível (erro ao gerar).", SMALL))
-    else:
-        story.append(Paragraph("QR indisponível (dependência não instalada).", SMALL))
+            pass
 
     doc.build(story, onFirstPage=header_footer, onLaterPages=header_footer)
     return buf.getvalue()
-
-
-def build_risk_pdf_institutional_pt(*args, **kwargs) -> bytes:
-    return build_risk_pdf_institutional(*args, **kwargs)
