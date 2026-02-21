@@ -143,28 +143,3 @@ def get_risk(
             raise HTTPException(status_code=403, detail="Forbidden")
 
     return RiskOut.model_validate(r)
-✅ O que isto resolve AGORA
-
-✅ ImportError: LoginOut desaparece (deploy sobe)
-
-✅ /risks/search deixa de dar 500 por schema errado (agora response_model bate certo)
-
-✅ /risks/confirm passa a existir (frontend chama exatamente isso)
-
-✅ RiskStatus usa DRAFT/DONE, que são os enums reais do teu models.py
-
-Depois do deploy
-
-Testa em sequência:
-
-Swagger: POST /risks/search com:
-
-{"name":"Teste","nationality":"Angolana"}
-
-Frontend: botão Pesquisar
-
-Selecionar candidato (se não houver candidates ainda, tudo bem por agora)
-
-Confirm: POST /risks/confirm vai criar um risk DONE e navegar para /risks/{id}
-
-Se me mandares o log novo após deploy (só a parte do erro, se houver), eu fecho o próximo ponto sem misturar nada.
