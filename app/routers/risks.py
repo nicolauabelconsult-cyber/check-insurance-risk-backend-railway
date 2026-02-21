@@ -14,7 +14,6 @@ from ..schemas import (
     RiskSearchOut,
     RiskConfirmIn,
 )
-
 from ..pdfs import (
     build_risk_pdf_institutional_pt,
     make_integrity_hash,
@@ -26,7 +25,6 @@ router = APIRouter(prefix="/risks", tags=["risks"])
 
 
 def _ensure_scope(user, entity_id: str):
-    """SUPER_ADMIN vê tudo; outros só operam na própria entity_id."""
     role_val = getattr(getattr(user, "role", None), "value", getattr(user, "role", None))
     if role_val == "SUPER_ADMIN":
         return
@@ -36,9 +34,6 @@ def _ensure_scope(user, entity_id: str):
         raise HTTPException(status_code=403, detail="Sem permissão para esta entidade")
 
 
-# -------------------------------------------------------------------
-# SEARCH (FIX 500)
-# -------------------------------------------------------------------
 @router.post("/search", response_model=RiskSearchOut)
 def search_risk(
     payload: RiskSearchIn,
@@ -46,9 +41,9 @@ def search_risk(
     user=Depends(get_current_user),
 ):
     """
-    Produção V1:
-      - cria um Risk em DRAFT (persistido)
-      - devolve RiskSearchOut (SEM campo 'risk'!)
+    FIX DO 500:
+    - RiskSearchOut exige disambiguation_required + candidates
+    - NÃO devolve 'risk'
     """
     entity_id = payload.entity_id or getattr(user, "entity_id", None)
     if not entity_id:
@@ -56,7 +51,6 @@ def search_risk(
 
     _ensure_scope(user, entity_id)
 
-    # payload.full_name existe (alias "name" no JSON)
     full_name = (payload.full_name or "").strip()
     if not full_name:
         raise HTTPException(status_code=400, detail="name is required")
@@ -73,23 +67,19 @@ def search_risk(
     db.add(risk)
     db.commit()
 
-    # ✅ resposta exatamente como o schema pede
+    # ✅ resposta 100% compatível com RiskSearchOut
     return RiskSearchOut(disambiguation_required=False, candidates=[])
 
 
-# -------------------------------------------------------------------
-# CONFIRM (rota que o FRONTEND chama)
-# -------------------------------------------------------------------
 @router.post("/confirm", response_model=RiskOut)
-def confirm_no_match(
+def confirm_risk(
     payload: RiskConfirmIn,
     db: Session = Depends(get_db),
     user=Depends(require_perm("risk:confirm")),
 ):
     """
-    Endpoint compatível com o frontend:
-      POST /risks/confirm
-    Suporta candidate_id="NO_MATCH" e gera análise DONE (para PDF).
+    Endpoint que o frontend chama: POST /risks/confirm
+    Suporta NO_MATCH para gerar relatório mesmo sem correspondências.
     """
     entity_id = payload.entity_id or getattr(user, "entity_id", None)
     if not entity_id:
@@ -125,31 +115,6 @@ def confirm_no_match(
     return RiskOut.model_validate(risk)
 
 
-# -------------------------------------------------------------------
-# CONFIRM antigo (mantém compatibilidade se existir em algum fluxo)
-# -------------------------------------------------------------------
-@router.post("/{risk_id}/confirm", response_model=RiskOut)
-def confirm_risk_legacy(
-    risk_id: str,
-    payload: RiskConfirmIn,
-    db: Session = Depends(get_db),
-    user=Depends(require_perm("risk:confirm")),
-):
-    risk = db.query(Risk).filter(Risk.id == risk_id).first()
-    if not risk:
-        raise HTTPException(status_code=404, detail="Risk não encontrado")
-
-    _ensure_scope(user, risk.entity_id)
-
-    risk.status = RiskStatus.CONFIRMED
-    db.commit()
-    db.refresh(risk)
-    return RiskOut.model_validate(risk)
-
-
-# -------------------------------------------------------------------
-# LIST / GET
-# -------------------------------------------------------------------
 @router.get("", response_model=list[RiskOut])
 def list_risks(
     db: Session = Depends(get_db),
@@ -174,13 +139,12 @@ def get_risk(
     if not risk:
         raise HTTPException(status_code=404, detail="Risk não encontrado")
 
-    _ensure_scope(user, risk.entity_id)
+    if user.role != UserRole.SUPER_ADMIN and risk.entity_id != user.entity_id:
+        raise HTTPException(status_code=403, detail="Sem permissão para este sector")
+
     return RiskOut.model_validate(risk)
 
 
-# -------------------------------------------------------------------
-# PDF (rota que o frontend usa no detalhe)
-# -------------------------------------------------------------------
 @router.get("/{risk_id}/pdf")
 def get_risk_pdf(
     risk_id: str,
@@ -191,7 +155,8 @@ def get_risk_pdf(
     if not risk:
         raise HTTPException(status_code=404, detail="Risk não encontrado")
 
-    _ensure_scope(user, risk.entity_id)
+    if user.role != UserRole.SUPER_ADMIN and risk.entity_id != user.entity_id:
+        raise HTTPException(status_code=403, detail="Sem permissão para este sector")
 
     generated_at = datetime.now(timezone.utc)
     integrity_hash = make_integrity_hash(risk)
