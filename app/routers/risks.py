@@ -42,8 +42,40 @@ def search_risk(
 
     return RiskSearchOut(
         risk=RiskOut.model_validate(risk),
+        disambiguation_required=False,
         candidates=[],
     )
+
+
+@router.post("/confirm", response_model=RiskOut)
+def confirm_risk_direct(
+    payload: RiskConfirmIn,
+    db: Session = Depends(get_db),
+    user=Depends(require_perm("risks:confirm")),
+):
+    """
+    Endpoint compatível com o frontend (POST /risks/confirm).
+    Cria um Risk já CONFIRMED. Mantém RBAC via require_perm.
+    """
+    entity_id = payload.entity_id or getattr(user, "entity_id", None)
+    if not entity_id:
+        raise HTTPException(status_code=400, detail="entity_id required")
+
+    risk = Risk(
+        id=str(uuid.uuid4()),
+        entity_id=entity_id,
+        created_by=user.id,
+        query_name=payload.name,
+        query_nationality=payload.nationality,
+        status=RiskStatus.CONFIRMED,
+        matches=[],
+    )
+    db.add(risk)
+    db.commit()
+    db.refresh(risk)
+
+    return RiskOut.model_validate(risk)
+
 
 @router.post("/{risk_id}/confirm", response_model=RiskOut)
 def confirm_risk(
@@ -67,7 +99,7 @@ def confirm_risk(
 
     # Mantém os campos do teu modelo (ajusta se existirem no teu Risk)
     if hasattr(risk, "score"):
-        risk.score = payload.score if hasattr(payload, "score") else getattr(risk, "score", None)
+        risk.score = getattr(payload, "score", None) or getattr(risk, "score", None)
     if hasattr(risk, "justification"):
         risk.justification = getattr(payload, "justification", None) or getattr(risk, "justification", None)
     if hasattr(risk, "matches"):
