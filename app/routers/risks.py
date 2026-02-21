@@ -1,3 +1,6 @@
+# app/routers/risks.py
+from __future__ import annotations
+
 import uuid
 from datetime import datetime, timezone
 
@@ -6,7 +9,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import require_perm, get_current_user
+from app.deps import get_current_user, require_perm
 from app.models import Risk, RiskStatus, UserRole
 from app.schemas import RiskOut, RiskSearchIn, RiskSearchOut, RiskConfirmIn
 from app.pdfs import build_risk_pdf_institutional_pt, make_integrity_hash, make_server_signature
@@ -15,7 +18,8 @@ from app.settings import settings
 router = APIRouter(prefix="/risks", tags=["risks"])
 
 
-def _ensure_scope(user, entity_id: str):
+def _ensure_scope(user, entity_id: str) -> None:
+    """SUPER_ADMIN vê tudo; os outros só podem operar na sua entity_id."""
     if user.role == UserRole.SUPER_ADMIN:
         return
     if not getattr(user, "entity_id", None):
@@ -30,40 +34,49 @@ def search_risk(
     db: Session = Depends(get_db),
     user=Depends(require_perm("risk:create")),
 ):
+    """
+    Produção V1:
+    - cria um Risk em DRAFT (persistido)
+    - devolve candidates (por agora vazio)
+    """
     entity_id = payload.entity_id or getattr(user, "entity_id", None)
     if not entity_id:
         raise HTTPException(status_code=400, detail="entity_id required")
 
     _ensure_scope(user, entity_id)
 
+    name = (payload.full_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
     risk = Risk(
         id=str(uuid.uuid4()),
         entity_id=entity_id,
         created_by=user.id,
-        query_name=payload.full_name,
-        query_nationality=payload.nationality,
         status=RiskStatus.DRAFT,
+        query_name=name,
+        query_nationality=(payload.nationality.strip() if payload.nationality else None),
         matches=[],
         score=None,
         summary=None,
     )
     db.add(risk)
     db.commit()
-    db.refresh(risk)
 
-    # V1: candidatos ainda vazio
+    # Schema atual do teu backend: RiskSearchOut tem só (disambiguation_required, candidates)
     return RiskSearchOut(disambiguation_required=False, candidates=[])
 
 
 @router.post("/confirm", response_model=RiskOut)
-def confirm_no_match_or_candidate(
+def confirm_risk(
     payload: RiskConfirmIn,
     db: Session = Depends(get_db),
     user=Depends(require_perm("risk:confirm")),
 ):
     """
-    Confirma direto (inclui NO_MATCH) e grava DONE.
-    O frontend chama este endpoint.
+    Compatível com o frontend:
+    - POST /risks/confirm
+    - suporta candidate_id="NO_MATCH" e grava DONE
     """
     entity_id = payload.entity_id or getattr(user, "entity_id", None)
     if not entity_id:
@@ -71,25 +84,32 @@ def confirm_no_match_or_candidate(
 
     _ensure_scope(user, entity_id)
 
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="name is required")
+    if not payload.nationality.strip():
+        raise HTTPException(status_code=400, detail="nationality is required")
+    if not payload.id_number.strip():
+        raise HTTPException(status_code=400, detail="id_number is required")
+
     is_no_match = payload.candidate_id == "NO_MATCH"
 
-    r = Risk(
+    risk = Risk(
         id=str(uuid.uuid4()),
         entity_id=entity_id,
         created_by=user.id,
-        query_name=payload.name,
-        query_nationality=payload.nationality,
-        query_bi=(payload.id_number if payload.id_type == "BI" else None),
-        query_passport=(payload.id_number if payload.id_type == "PASSPORT" else None),
         status=RiskStatus.DONE,
+        query_name=payload.name.strip(),
+        query_nationality=payload.nationality.strip(),
+        query_bi=(payload.id_number.strip() if payload.id_type == "BI" else None),
+        query_passport=(payload.id_number.strip() if payload.id_type == "PASSPORT" else None),
         matches=[],
         score="0" if is_no_match else None,
         summary="Sem correspondência nas fontes disponíveis." if is_no_match else None,
     )
-    db.add(r)
+    db.add(risk)
     db.commit()
-    db.refresh(r)
-    return RiskOut.model_validate(r)
+    db.refresh(risk)
+    return RiskOut.model_validate(risk)
 
 
 @router.get("/{risk_id}", response_model=RiskOut)
@@ -101,6 +121,7 @@ def get_risk(
     r = db.get(Risk, risk_id)
     if not r:
         raise HTTPException(status_code=404, detail="Risk não encontrado")
+
     _ensure_scope(user, r.entity_id)
     return RiskOut.model_validate(r)
 
@@ -119,10 +140,7 @@ def get_risk_pdf(
 
     generated_at = datetime.now(timezone.utc)
     integrity_hash = make_integrity_hash(r)
-
-    # Nota: a tua Settings tem PDF_SECRET_KEY, mas a função usa JWT_SECRET se não houver outro
     server_signature = make_server_signature(integrity_hash)
-
     verify_url = f"{settings.BASE_URL.rstrip('/')}/verify/{r.id}/{integrity_hash}"
 
     pdf_bytes = build_risk_pdf_institutional_pt(
