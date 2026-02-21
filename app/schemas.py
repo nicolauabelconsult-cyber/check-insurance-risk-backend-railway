@@ -18,7 +18,16 @@ class UserOut(BaseModel):
     role: str
     status: str
     entity: Optional[UserEntity] = None
-    permissions: List[str] = []
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class TokenRefreshIn(BaseModel):
+    refresh_token: str
 
 
 class LoginIn(BaseModel):
@@ -26,30 +35,11 @@ class LoginIn(BaseModel):
     password: str
 
 
-class LoginOut(BaseModel):
-    access_token: str
-    refresh_token: str
-    user: UserOut
-
-
-class RefreshIn(BaseModel):
-    refresh_token: str
-
-
-class TokenOut(BaseModel):
-    access_token: str
-
-
 # ---------------- ENTITIES ----------------
 class EntityCreate(BaseModel):
     name: str
-    type: str  # "BANK" | "INSURER" | "OTHER"
-
-
-class EntityUpdate(BaseModel):
-    name: Optional[str] = None
-    type: Optional[str] = None
-    status: Optional[str] = None  # "ACTIVE" | "DISABLED"
+    type: Literal["BANKING", "INSURANCE", "PENSION", "BROKER", "OTHER"] = "OTHER"
+    status: Literal["ACTIVE", "INACTIVE"] = "ACTIVE"
 
 
 class EntityOut(BaseModel):
@@ -64,36 +54,36 @@ class UserCreate(BaseModel):
     name: str
     email: EmailStr
     password: str
-    role: str
+    role: Literal["SUPER_ADMIN", "ADMIN", "CLIENT"] = "CLIENT"
+    status: Literal["ACTIVE", "INACTIVE"] = "ACTIVE"
     entity_id: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
-    role: Optional[str] = None
-    status: Optional[str] = None
+    email: Optional[EmailStr] = None
+    role: Optional[Literal["SUPER_ADMIN", "ADMIN", "CLIENT"]] = None
+    status: Optional[Literal["ACTIVE", "INACTIVE"]] = None
     entity_id: Optional[str] = None
+    password: Optional[str] = None
 
 
-class ResetPasswordIn(BaseModel):
-    new_password: str
+class UserListOut(BaseModel):
+    id: str
+    name: str
+    email: EmailStr
+    role: str
+    status: str
+    entity_id: Optional[str] = None
 
 
 # ---------------- SOURCES ----------------
 class SourceCreate(BaseModel):
-    # SUPER_ADMIN/ADMIN pode criar para qualquer entity_id
-    # CLIENT_* cria só para a sua entidade
-    entity_id: Optional[str] = None
     name: str
-    category: str
-    collected_from: str
-
-
-class SourceUpdate(BaseModel):
-    name: Optional[str] = None
-    category: Optional[str] = None
-    collected_from: Optional[str] = None
-    status: Optional[str] = None
+    category: Literal["PEP", "SANCTIONS", "INSURANCE"] = "PEP"
+    jurisdiction: str = "ANGOLA"
+    status: Literal["ACTIVE", "INACTIVE"] = "ACTIVE"
+    notes: Optional[str] = None
 
 
 class SourceOut(BaseModel):
@@ -101,50 +91,56 @@ class SourceOut(BaseModel):
     entity_id: str
     name: str
     category: str
-    collected_from: str
+    jurisdiction: str
     status: str
+    notes: Optional[str] = None
 
 
 # ---------------- RISKS ----------------
 class RiskOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    model_config = ConfigDict(from_attributes=True)
 
     id: str
     entity_id: str
-
-    name: str | None = Field(default=None, validation_alias="query_name")
-    bi: str | None = Field(default=None, validation_alias="query_bi")
-    passport: str | None = Field(default=None, validation_alias="query_passport")
-    nationality: str | None = Field(default=None, validation_alias="query_nationality")
-
-    score: str | None = None
-    summary: str | None = None
-    matches: list[Any] = []
+    created_by: str
     status: str
+    query_name: Optional[str] = None
+    query_nationality: Optional[str] = None
+    score: Optional[int] = None
+    matches: Any = None
+    created_at: Optional[Any] = None
 
 
 class RiskSearchIn(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    # ✅ clients: pode omitir -> backend usa u.entity_id
+    # ✅ admins: pode enviar entity_id
+    entity_id: Optional[str] = None
 
-    entity_id: str | None = None
-    full_name: str = Field(..., alias="name")
-    nationality: str | None = None
+    full_name: str
+    nationality: str
+    id_type: Literal["BI", "PASSPORT"]
+    id_number: str
 
 
 class CandidateOut(BaseModel):
+    # placeholder para futuro motor real
     id: str
     full_name: str
     nationality: Optional[str] = None
-    dob: Optional[str] = None
-    doc_type: Optional[str] = None
     doc_last4: Optional[str] = None
     sources: List[str] = []
     match_score: int
 
 
 class RiskSearchOut(BaseModel):
-    disambiguation_required: bool
-    candidates: List[CandidateOut]
+    # frontend usa isto: out.candidates
+    candidates: List[CandidateOut] = []
+
+    # quando o motor exigir escolha (futuro)
+    disambiguation_required: bool = False
+
+    # Risk criado em DRAFT para persistência / rastreio
+    risk: Optional[RiskOut] = None
 
 
 class RiskConfirmIn(BaseModel):
@@ -161,9 +157,21 @@ class RiskConfirmIn(BaseModel):
 # ---------------- AUDIT ----------------
 class AuditOut(BaseModel):
     id: str
+    entity_id: str
+    actor_id: str
     action: str
-    actor_name: str
-    entity_name: Optional[str] = None
-    target_ref: Optional[str] = None
-    meta: Dict[str, Any] = {}
-    created_at: str
+    object_type: str
+    object_id: str
+    payload: Dict[str, Any] = {}
+    created_at: Any
+
+
+# ---------------- DASHBOARD ----------------
+class DashboardSummaryOut(BaseModel):
+    entities: int
+    users: int
+    sources: int
+    risks_total: int
+    risks_draft: int
+    risks_confirmed: int
+    avg_score: float
