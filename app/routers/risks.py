@@ -1,11 +1,12 @@
+# app/routers/risks.py
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..db import get_db
-from ..deps import require_perm, get_current_user
-from ..models import Risk, RiskStatus, UserRole
-from ..schemas import (
+from app.db import get_db
+from app.deps import get_current_user, require_perm
+from app.models import Risk, RiskStatus, UserRole
+from app.schemas import (
     RiskOut,
     RiskSearchIn,
     RiskSearchOut,
@@ -18,93 +19,89 @@ router = APIRouter(prefix="/risks", tags=["risks"])
 
 @router.post("/search", response_model=RiskSearchOut)
 def search_risk(
-    payload: RiskSearchIn,
+    body: RiskSearchIn,
     db: Session = Depends(get_db),
-    user=Depends(get_current_user),
+    u=Depends(get_current_user),
 ):
-    """Cria uma análise (Risk) e devolve o objeto + candidatos (vazio por agora)."""
-    entity_id = payload.entity_id or getattr(user, "entity_id", None)
+    """
+    Produção V1:
+    - cria Risk em DRAFT
+    - devolve candidates (mock por agora) + risk
+    Payload alinhado ao frontend: {name, nationality?, entity_id?}
+    """
+    entity_id = body.entity_id or getattr(u, "entity_id", None)
     if not entity_id:
         raise HTTPException(status_code=400, detail="entity_id required")
+
+    if not body.name or not body.name.strip():
+        raise HTTPException(status_code=400, detail="name is required")
 
     risk = Risk(
         id=str(uuid.uuid4()),
         entity_id=entity_id,
-        created_by=user.id,
-        query_name=payload.full_name,
-        query_nationality=payload.nationality,
+        created_by=u.id,
         status=RiskStatus.DRAFT,
+        query_name=body.name.strip(),
+        query_nationality=(body.nationality.strip() if body.nationality else None),
         matches=[],
+        score=None,
+        summary=None,
     )
     db.add(risk)
     db.commit()
     db.refresh(risk)
 
+    # Motor real ainda não ligado: candidates vazio por agora
     return RiskSearchOut(
-        risk=RiskOut.model_validate(risk),
         disambiguation_required=False,
         candidates=[],
+        risk=RiskOut.model_validate(risk),
     )
 
 
 @router.post("/confirm", response_model=RiskOut)
 def confirm_risk_direct(
-    payload: RiskConfirmIn,
+    body: RiskConfirmIn,
     db: Session = Depends(get_db),
-    user=Depends(require_perm("risks:confirm")),
+    u=Depends(require_perm("risks:confirm")),
 ):
     """
     Endpoint compatível com o frontend (POST /risks/confirm).
-    Cria um Risk já CONFIRMED. Mantém RBAC via require_perm.
+    Marca como DONE e grava BI/PASSPORT conforme id_type.
     """
-    entity_id = payload.entity_id or getattr(user, "entity_id", None)
+    entity_id = body.entity_id or getattr(u, "entity_id", None)
     if not entity_id:
         raise HTTPException(status_code=400, detail="entity_id required")
+
+    # Scoping: só SUPER_ADMIN pode confirmar para outra entidade
+    if u.role != UserRole.SUPER_ADMIN:
+        if not getattr(u, "entity_id", None):
+            raise HTTPException(status_code=403, detail="Entity scope missing")
+        if entity_id != u.entity_id:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    if body.id_type == "BI":
+        q_bi = body.id_number.strip()
+        q_pass = None
+    else:
+        q_bi = None
+        q_pass = body.id_number.strip()
 
     risk = Risk(
         id=str(uuid.uuid4()),
         entity_id=entity_id,
-        created_by=user.id,
-        query_name=payload.name,
-        query_nationality=payload.nationality,
-        status=RiskStatus.CONFIRMED,
+        created_by=u.id,
+        status=RiskStatus.DONE,
+        query_name=body.name.strip(),
+        query_nationality=body.nationality.strip(),
+        query_bi=q_bi,
+        query_passport=q_pass,
         matches=[],
+        score=None,
+        summary=None,
     )
+
     db.add(risk)
-    db.commit()
-    db.refresh(risk)
-
-    return RiskOut.model_validate(risk)
-
-
-@router.post("/{risk_id}/confirm", response_model=RiskOut)
-def confirm_risk(
-    risk_id: str,
-    payload: RiskConfirmIn,
-    db: Session = Depends(get_db),
-    user=Depends(require_perm("risks:confirm")),
-):
-    """
-    Confirma o risco (mantém RBAC). Aqui é onde depois ligamos ao motor real.
-    """
-    risk = db.query(Risk).filter(Risk.id == risk_id).first()
-    if not risk:
-        raise HTTPException(status_code=404, detail="Risk não encontrado")
-
-    # Scoping: ADMIN/CLIENT só podem operar no seu entity_id
-    if user.role != UserRole.SUPER_ADMIN and risk.entity_id != user.entity_id:
-        raise HTTPException(status_code=403, detail="Sem permissão para este sector")
-
-    risk.status = RiskStatus.CONFIRMED
-
-    # Mantém os campos do teu modelo (ajusta se existirem no teu Risk)
-    if hasattr(risk, "score"):
-        risk.score = getattr(payload, "score", None) or getattr(risk, "score", None)
-    if hasattr(risk, "justification"):
-        risk.justification = getattr(payload, "justification", None) or getattr(risk, "justification", None)
-    if hasattr(risk, "matches"):
-        risk.matches = getattr(payload, "matches", None) or getattr(risk, "matches", None)
-
     db.commit()
     db.refresh(risk)
     return RiskOut.model_validate(risk)
@@ -113,28 +110,61 @@ def confirm_risk(
 @router.get("", response_model=list[RiskOut])
 def list_risks(
     db: Session = Depends(get_db),
-    user=Depends(get_current_user),
+    u=Depends(get_current_user),
 ):
     q = db.query(Risk)
-    role_val = getattr(getattr(user, "role", None), "value", getattr(user, "role", None))
-    if role_val != "SUPER_ADMIN":
-        q = q.filter(Risk.entity_id == user.entity_id)
 
-    items = q.order_by(Risk.created_at.desc()).limit(200).all()
-    return [RiskOut.model_validate(r) for r in items]
+    # Scoping por entidade (apenas SUPER_ADMIN vê tudo)
+    role_val = getattr(getattr(u, "role", None), "value", getattr(u, "role", None))
+    if role_val != "SUPER_ADMIN":
+        if not getattr(u, "entity_id", None):
+            raise HTTPException(status_code=403, detail="Entity scope missing")
+        q = q.filter(Risk.entity_id == u.entity_id)
+
+    rows = q.order_by(Risk.created_at.desc()).limit(200).all()
+    return [RiskOut.model_validate(r) for r in rows]
 
 
 @router.get("/{risk_id}", response_model=RiskOut)
 def get_risk(
     risk_id: str,
     db: Session = Depends(get_db),
-    user=Depends(get_current_user),
+    u=Depends(get_current_user),
 ):
-    risk = db.query(Risk).filter(Risk.id == risk_id).first()
-    if not risk:
-        raise HTTPException(status_code=404, detail="Risk não encontrado")
+    r = db.get(Risk, risk_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Risk not found")
 
-    if user.role != UserRole.SUPER_ADMIN and risk.entity_id != user.entity_id:
-        raise HTTPException(status_code=403, detail="Sem permissão para este sector")
+    role_val = getattr(getattr(u, "role", None), "value", getattr(u, "role", None))
+    if role_val != "SUPER_ADMIN":
+        if not getattr(u, "entity_id", None):
+            raise HTTPException(status_code=403, detail="Entity scope missing")
+        if r.entity_id != u.entity_id:
+            raise HTTPException(status_code=403, detail="Forbidden")
 
-    return RiskOut.model_validate(risk)
+    return RiskOut.model_validate(r)
+✅ O que isto resolve AGORA
+
+✅ ImportError: LoginOut desaparece (deploy sobe)
+
+✅ /risks/search deixa de dar 500 por schema errado (agora response_model bate certo)
+
+✅ /risks/confirm passa a existir (frontend chama exatamente isso)
+
+✅ RiskStatus usa DRAFT/DONE, que são os enums reais do teu models.py
+
+Depois do deploy
+
+Testa em sequência:
+
+Swagger: POST /risks/search com:
+
+{"name":"Teste","nationality":"Angolana"}
+
+Frontend: botão Pesquisar
+
+Selecionar candidato (se não houver candidates ainda, tudo bem por agora)
+
+Confirm: POST /risks/confirm vai criar um risk DONE e navegar para /risks/{id}
+
+Se me mandares o log novo após deploy (só a parte do erro, se houver), eu fecho o próximo ponto sem misturar nada.
