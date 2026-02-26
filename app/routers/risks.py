@@ -365,7 +365,7 @@ def get_risk_pdf(
     except Exception:
         underwriting_by_product = None
 
-pdf_bytes = build_risk_pdf_institutional_pt(
+    pdf_bytes = build_risk_pdf_institutional_pt(
         risk=risk,
         analyst_name=getattr(user, "name", "Analista"),
         generated_at=generated_at,
