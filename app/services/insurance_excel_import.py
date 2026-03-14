@@ -172,7 +172,11 @@ def import_insurance_workbook(
         policies, payments, claims, cancellations, fraud_flags
     - ou 1 sheet 'records' / active (fallback simples)
     """
-    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    wb = openpyxl.load_workbook(
+        io.BytesIO(content),
+        data_only=True,
+        read_only=True,
+    )
 
     # modelo institucional (5 sheets)
     policies_rows = _read_sheet_case_insensitive(wb, "policies")
