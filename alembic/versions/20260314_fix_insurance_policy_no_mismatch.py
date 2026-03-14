@@ -1,7 +1,7 @@
 """fix insurance policy_no mismatch
 
 Revision ID: 20260314_fix_insurance_policy_no_mismatch
-Revises: 
+Revises: 0004_source_records
 Create Date: 2026-03-14
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "20260314_fix_insurance_policy_no_mismatch"
-down_revision = None
+down_revision = "0004_source_records"
 branch_labels = None
 depends_on = None
 
@@ -54,9 +54,6 @@ def upgrade():
             existing_type=sa.String(),
             nullable=True,
         )
-
-    # 4) opcional: garantir policy_number indexável/normalizada no futuro
-    # Se quiseres, depois fazemos uma migration separada para remover policy_no definitivamente.
 
 
 def downgrade():
