@@ -64,10 +64,6 @@ def _int(v: Any) -> Optional[int]:
 
 
 def _read_sheet_case_insensitive(wb, wanted_name: str) -> List[Dict[str, Any]]:
-    """
-    Lê uma sheet ignorando capitalização.
-    Ex.: policies / Policies / POLICIES
-    """
     real_name = None
     for s in wb.sheetnames:
         if str(s).strip().lower() == wanted_name.strip().lower():
@@ -98,10 +94,6 @@ def _read_sheet_case_insensitive(wb, wanted_name: str) -> List[Dict[str, Any]]:
 
 
 def _read_active_records_fallback(wb) -> List[Dict[str, Any]]:
-    """
-    Fallback para modelo simples (1 sheet).
-    Tenta sheet 'records', senão usa a active.
-    """
     ws = None
     for s in wb.sheetnames:
         if str(s).strip().lower() == "records":
@@ -144,9 +136,6 @@ def _subject_fields(row: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], 
 
 
 def delete_previous_import(db: Session, *, entity_id: str, source_ref: str) -> None:
-    """
-    Limpa importações anteriores desse source_ref dentro da entidade.
-    """
     for model in (InsurancePolicy, Payment, Claim, Cancellation, FraudFlag):
         db.query(model).filter(
             model.entity_id == entity_id,
@@ -164,28 +153,18 @@ def import_insurance_workbook(
     filename: str,
     content: bytes,
 ) -> Dict[str, Any]:
-    """
-    Importa INSURANCE (seguro) num modelo institucional agrupável por produto.
-
-    Aceita:
-    - workbook com sheets:
-        policies, payments, claims, cancellations, fraud_flags
-    - ou 1 sheet 'records' / active (fallback simples)
-    """
     wb = openpyxl.load_workbook(
         io.BytesIO(content),
         data_only=True,
         read_only=True,
     )
 
-    # modelo institucional (5 sheets)
     policies_rows = _read_sheet_case_insensitive(wb, "policies")
     payments_rows = _read_sheet_case_insensitive(wb, "payments")
     claims_rows = _read_sheet_case_insensitive(wb, "claims")
     cancellations_rows = _read_sheet_case_insensitive(wb, "cancellations")
     fraud_rows = _read_sheet_case_insensitive(wb, "fraud_flags")
 
-    # fallback: modelo simples
     if not any((policies_rows, payments_rows, claims_rows, cancellations_rows, fraud_rows)):
         policies_rows = _read_active_records_fallback(wb)
 
@@ -323,7 +302,6 @@ def import_insurance_workbook(
         db.add(obj)
         inserted["fraud_flags"] += 1
 
-    # limpa reimportação anterior
     delete_previous_import(db, entity_id=entity_id, source_ref=source_ref)
 
     def ingest(rows: List[Dict[str, Any]], fn, key: str) -> None:
