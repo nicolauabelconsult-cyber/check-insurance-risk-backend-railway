@@ -11,7 +11,6 @@ from app.models import Source
 from app.models_source_records import SourceRecord
 from app.services.source_parser_official import parse_official
 
-# ✅ TEM de se chamar "router"
 router = APIRouter(tags=["sources"])
 
 
@@ -21,7 +20,7 @@ def _safe_json_value(v):
     if isinstance(v, (str, int, float, bool)):
         return v
     try:
-        return v.isoformat()  # date/datetime
+        return v.isoformat()
     except Exception:
         return str(v)
 
@@ -37,19 +36,16 @@ def upload_source_file(
     if not src:
         raise HTTPException(status_code=404, detail="Fonte não encontrada")
 
-    # 🔒 Multi-tenant scope
     ensure_entity_scope(user, src.entity_id)
 
     category = (getattr(src, "category", None) or "").upper().strip()
     if category not in ("PEP", "SANCTIONS", "ADVERSE_MEDIA", "WATCHLIST", "INSURANCE"):
         raise HTTPException(status_code=400, detail="Fonte sem categoria válida.")
 
-    # Sector = tenant (na tua V1)
-    entity_id = getattr(src, "entity_id", None) or getattr(src, "sector", None)
+    entity_id = src.entity_id
     if not entity_id:
-        raise HTTPException(status_code=400, detail="Fonte sem entity_id/sector.")
+        raise HTTPException(status_code=400, detail="Fonte sem entity_id.")
 
-    # Read bytes safely
     try:
         content = file.file.read()
     finally:
@@ -67,7 +63,6 @@ def upload_source_file(
     if category == "INSURANCE":
         from app.services.insurance_excel_import import import_insurance_workbook
 
-        # reimport limpo por fonte em underwriting tables + SourceRecord
         db.query(SourceRecord).filter(
             SourceRecord.source_id == str(src.id)
         ).delete(synchronize_session=False)
@@ -77,7 +72,7 @@ def upload_source_file(
                 db,
                 entity_id=str(entity_id),
                 source_name=str(src.name),
-                source_ref=str(src.id),  # amarra ao source para reimport seguro
+                source_ref=str(src.id),
                 filename=file.filename or "insurance.xlsx",
                 content=content,
             )
@@ -88,7 +83,6 @@ def upload_source_file(
             db.rollback()
             raise HTTPException(status_code=400, detail=f"Erro no import de Seguros: {e}")
 
-        # Criar SourceRecord mínimos para permitir match por nome via /risks/search
         inserted_policy_names = set()
         try:
             from app.models import InsurancePolicy as UWPolicy
@@ -145,7 +139,6 @@ def upload_source_file(
             db.commit()
 
         except Exception:
-            # best-effort: não falhar o upload se só o SourceRecord falhar
             src.status = "ACTIVE"
             db.add(src)
             db.commit()
@@ -158,7 +151,7 @@ def upload_source_file(
         }
 
     # =========================
-    # OFFICIAL LISTS (PEP/Sanctions/etc.)
+    # OFFICIAL LISTS
     # =========================
     try:
         valid, invalid = parse_official(category, file.filename, content)
@@ -167,7 +160,6 @@ def upload_source_file(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Erro no import da fonte: {e}")
 
-    # reimport limpo por fonte
     db.query(SourceRecord).filter(
         SourceRecord.source_id == str(src.id)
     ).delete(synchronize_session=False)
