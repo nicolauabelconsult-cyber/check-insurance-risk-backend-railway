@@ -15,6 +15,17 @@ from app.services.source_parser_official import parse_official
 router = APIRouter(tags=["sources"])
 
 
+def _safe_json_value(v):
+    if v is None:
+        return None
+    if isinstance(v, (str, int, float, bool)):
+        return v
+    try:
+        return v.isoformat()  # date/datetime
+    except Exception:
+        return str(v)
+
+
 @router.post("/sources/{source_id}/upload")
 def upload_source_file(
     source_id: str,
@@ -57,7 +68,9 @@ def upload_source_file(
         from app.services.insurance_excel_import import import_insurance_workbook
 
         # reimport limpo por fonte em underwriting tables + SourceRecord
-        db.query(SourceRecord).filter(SourceRecord.source_id == str(src.id)).delete()
+        db.query(SourceRecord).filter(
+            SourceRecord.source_id == str(src.id)
+        ).delete(synchronize_session=False)
 
         try:
             result = import_insurance_workbook(
@@ -65,7 +78,7 @@ def upload_source_file(
                 entity_id=str(entity_id),
                 source_name=str(src.name),
                 source_ref=str(src.id),  # amarra ao source para reimport seguro
-                filename=file.filename,
+                filename=file.filename or "insurance.xlsx",
                 content=content,
             )
         except HTTPException:
@@ -82,16 +95,22 @@ def upload_source_file(
 
             rows = (
                 db.query(UWPolicy)
-                .filter(UWPolicy.entity_id == str(entity_id), UWPolicy.source_ref == str(src.id))
+                .filter(
+                    UWPolicy.entity_id == str(entity_id),
+                    UWPolicy.source_ref == str(src.id),
+                )
                 .limit(500)
                 .all()
             )
             now = datetime.utcnow()
+
             for row in rows or []:
                 subj = (getattr(row, "subject_full_name", None) or "").lower().strip()
                 if not subj or subj in inserted_policy_names:
                     continue
+
                 inserted_policy_names.add(subj)
+
                 db.add(
                     SourceRecord(
                         entity_id=str(entity_id),
@@ -100,23 +119,35 @@ def upload_source_file(
                         subject_name=subj,
                         country=None,
                         raw={
-                            "full_name": getattr(row, "subject_full_name", None),
-                            "id_number": getattr(row, "subject_bi", None)
-                            or getattr(row, "subject_passport", None),
-                            "doc_type": "BI"
-                            if getattr(row, "subject_bi", None)
-                            else (
-                                "PASSPORT" if getattr(row, "subject_passport", None) else None
+                            "full_name": _safe_json_value(getattr(row, "subject_full_name", None)),
+                            "id_number": _safe_json_value(
+                                getattr(row, "subject_bi", None)
+                                or getattr(row, "subject_passport", None)
                             ),
-                            "product_type": getattr(row, "product_type", None),
-                            "policy_number": getattr(row, "policy_number", None),
+                            "doc_type": (
+                                "BI"
+                                if getattr(row, "subject_bi", None)
+                                else (
+                                    "PASSPORT"
+                                    if getattr(row, "subject_passport", None)
+                                    else None
+                                )
+                            ),
+                            "product_type": _safe_json_value(getattr(row, "product_type", None)),
+                            "policy_number": _safe_json_value(getattr(row, "policy_number", None)),
                         },
                         created_at=now,
                     )
                 )
+
+            src.status = "ACTIVE"
+            db.add(src)
             db.commit()
+
         except Exception:
             # best-effort: não falhar o upload se só o SourceRecord falhar
+            src.status = "ACTIVE"
+            db.add(src)
             db.commit()
 
         return {
@@ -137,7 +168,9 @@ def upload_source_file(
         raise HTTPException(status_code=400, detail=f"Erro no import da fonte: {e}")
 
     # reimport limpo por fonte
-    db.query(SourceRecord).filter(SourceRecord.source_id == str(src.id)).delete()
+    db.query(SourceRecord).filter(
+        SourceRecord.source_id == str(src.id)
+    ).delete(synchronize_session=False)
 
     now = datetime.utcnow()
 
@@ -161,6 +194,8 @@ def upload_source_file(
             )
         )
 
+    src.status = "ACTIVE"
+    db.add(src)
     db.commit()
 
     return {
