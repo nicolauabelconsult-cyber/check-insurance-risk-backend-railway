@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
 
 from ..db import get_db
 from ..deps import require_perm, get_current_user, resolve_entity_id, ensure_entity_scope
@@ -26,6 +25,7 @@ from ..pdfs import (
     make_server_signature,
 )
 from ..settings import settings
+from ..services.underwriting import load_underwriting_by_product
 
 router = APIRouter(prefix="/risks", tags=["risks"])
 
@@ -56,14 +56,7 @@ def search_risk(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """Pesquisa em source_records (import oficial) e devolve candidatos.
-
-    ✅ Importante: RiskSearchOut tem apenas:
-      - disambiguation_required
-      - candidates
-    """
     entity_id = resolve_entity_id(user, payload.entity_id, require=True)
-
     _ensure_scope(user, entity_id)
 
     full_name = (payload.full_name or "").strip()
@@ -72,21 +65,20 @@ def search_risk(
 
     qname = _norm(full_name)
 
-    # Cria o Risk (DRAFT) para auditoria/rastreio
     risk = Risk(
         id=str(uuid.uuid4()),
         entity_id=entity_id,
         created_by=user.id,
         query_name=full_name,
         query_nationality=payload.nationality,
+        query_bi=getattr(payload, "id_number", None) if getattr(payload, "id_type", None) == "BI" else None,
+        query_passport=getattr(payload, "id_number", None) if getattr(payload, "id_type", None) == "PASSPORT" else None,
         status=RiskStatus.DRAFT,
         matches=[],
     )
     db.add(risk)
     db.commit()
 
-    # 🔎 Procura simples (contains) em SourceRecord.subject_name
-    # Nota: subject_name já está guardado em lowercase no upload.
     recs = (
         db.query(SourceRecord, Source)
         .join(Source, Source.id == SourceRecord.source_id)
@@ -97,18 +89,20 @@ def search_risk(
         .all()
     )
 
-    # Agrega por subject_name
     by_subject: dict[str, dict] = {}
     for rec, src in recs:
         subj = rec.subject_name or ""
         if subj not in by_subject:
+            raw = rec.raw or {}
+            doc_val = raw.get("id_number") or raw.get("bi") or raw.get("passport")
+            doc_last4 = str(doc_val)[-4:] if doc_val else None
             by_subject[subj] = {
                 "id": str(rec.id),
-                "full_name": (rec.raw.get("full_name") or rec.raw.get("subject_name") or rec.raw.get("entity_name") or subj),
-                "nationality": rec.raw.get("country") or rec.country,
-                "dob": rec.raw.get("date_of_birth"),
-                "doc_type": None,
-                "doc_last4": None,
+                "full_name": (raw.get("full_name") or raw.get("subject_name") or raw.get("entity_name") or subj),
+                "nationality": raw.get("country") or rec.country,
+                "dob": raw.get("date_of_birth"),
+                "doc_type": raw.get("doc_type"),
+                "doc_last4": doc_last4,
                 "sources": set(),
                 "match_score": _score(qname, subj),
                 "raw_samples": [],
@@ -138,7 +132,6 @@ def search_risk(
             )
         )
 
-    # guarda matches (para PDF/auditoria futura), mesmo antes do confirm
     risk.matches = [
         {
             "candidate_id": c.id,
@@ -149,7 +142,6 @@ def search_risk(
         }
         for c in candidates
     ]
-    # score simples: max candidate score
     risk.score = str(max([c.match_score for c in candidates], default=0))
     risk.summary = "Correspondências encontradas." if candidates else "Sem correspondência nas fontes disponíveis."
     db.commit()
@@ -165,24 +157,21 @@ def confirm_no_match(
     user=Depends(require_perm("risk:confirm")),
 ):
     entity_id = resolve_entity_id(user, payload.entity_id, require=True)
-
     _ensure_scope(user, entity_id)
 
     if not (payload.name or "").strip():
         raise HTTPException(status_code=400, detail="name is required")
 
-    # nationality e documento são opcionais (2º nível de validação)
     qname = _norm(payload.name.strip())
     is_no_match = payload.candidate_id == "NO_MATCH"
 
-    # Caso "Sem correspondência"
     if is_no_match:
         risk = Risk(
             id=str(uuid.uuid4()),
             entity_id=entity_id,
             created_by=user.id,
             query_name=payload.name.strip(),
-            query_nationality=(payload.nationality.strip() if (payload.nationality or '').strip() else None),
+            query_nationality=(payload.nationality.strip() if (payload.nationality or "").strip() else None),
             query_bi=payload.id_number.strip() if payload.id_type == "BI" else None,
             query_passport=payload.id_number.strip() if payload.id_type == "PASSPORT" else None,
             status=RiskStatus.DONE,
@@ -195,7 +184,6 @@ def confirm_no_match(
         db.refresh(risk)
         return RiskOut.model_validate(risk)
 
-    # Caso selecionou um candidato (candidate_id = UUID de um SourceRecord)
     try:
         cand_uuid = uuid.UUID(str(payload.candidate_id))
     except Exception:
@@ -207,9 +195,8 @@ def confirm_no_match(
     if cand.entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    subject = cand.subject_name  # já normalizado/lowercase no upload
+    subject = cand.subject_name
 
-    # Carrega TODAS as evidências (todas as categorias/fontes) desse subject
     recs = (
         db.query(SourceRecord, Source)
         .join(Source, Source.id == SourceRecord.source_id)
@@ -219,11 +206,10 @@ def confirm_no_match(
         .all()
     )
 
-    # 2º nível opcional: valida BI/Passaporte se o utilizador forneceu
     provided_doc = (payload.id_number or "").strip()
     if provided_doc:
         norm_doc = re.sub(r"\s+", "", provided_doc).lower()
-        doc_keys = {"id_number","bi","passport","document","document_number","nr_documento","numero_documento"}
+        doc_keys = {"id_number", "bi", "passport", "document", "document_number", "nr_documento", "numero_documento"}
         found_docs: list[str] = []
         for rec, _src in recs:
             raw = rec.raw or {}
@@ -231,7 +217,6 @@ def confirm_no_match(
                 v = raw.get(k)
                 if v:
                     found_docs.append(str(v))
-        # Se existirem docs nas evidências, exigimos match; se não existirem, não bloqueamos (apenas não valida)
         if found_docs:
             ok = False
             for v in found_docs:
@@ -263,7 +248,6 @@ def confirm_no_match(
                 "source": src.name,
                 "matched_name": raw.get("full_name") or raw.get("subject_name") or raw.get("entity_name") or subject,
                 "match_score": int(_score(qname, subject)),
-                # campos úteis por categoria (o PDF lê isto via _pick())
                 "role": raw.get("role") or raw.get("pep_position"),
                 "pep_level": raw.get("pep_level"),
                 "list_name": raw.get("list_name"),
@@ -275,12 +259,10 @@ def confirm_no_match(
                 "country": raw.get("country") or rec.country,
                 "reference": raw.get("reference_id") or raw.get("license_number") or raw.get("policy_number"),
                 "note": raw.get("notes") or raw.get("note") or raw.get("description"),
-                # mantém raw completo para auditoria
                 "raw": raw,
             }
         )
 
-    # Score institucional simples (cap 100)
     score = 0
     if sanc_hits > 0:
         score += 60
@@ -299,7 +281,7 @@ def confirm_no_match(
         entity_id=entity_id,
         created_by=user.id,
         query_name=payload.name.strip(),
-        query_nationality=(payload.nationality.strip() if (payload.nationality or '').strip() else None),
+        query_nationality=(payload.nationality.strip() if (payload.nationality or "").strip() else None),
         query_bi=payload.id_number.strip() if payload.id_type == "BI" else None,
         query_passport=payload.id_number.strip() if payload.id_type == "PASSPORT" else None,
         status=RiskStatus.DONE,
@@ -351,19 +333,13 @@ def get_risk_pdf(
     base_url = getattr(settings, "BASE_URL", "").rstrip("/")
     verify_url = f"{base_url}/verify/{risk.id}/{integrity_hash}" if base_url else ""
 
-    
-    # Underwriting (Seguros) por produto, carregado no momento de geração do PDF
-    try:
-        from app.services.underwriting import load_underwriting_by_product
-        underwriting_by_product = load_underwriting_by_product(
-            db,
-            entity_id=risk.entity_id,
-            full_name=risk.query_name,
-            bi=risk.query_bi,
-            passport=risk.query_passport,
-        )
-    except Exception:
-        underwriting_by_product = None
+    underwriting_by_product = load_underwriting_by_product(
+        db,
+        entity_id=risk.entity_id,
+        full_name=risk.query_name,
+        bi=risk.query_bi,
+        passport=risk.query_passport,
+    )
 
     pdf_bytes = build_risk_pdf_institutional_pt(
         risk=risk,
