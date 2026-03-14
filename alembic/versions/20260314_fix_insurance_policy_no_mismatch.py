@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "20260314_fix_insurance_policy_no_mismatch"
-down_revision = "abc123ultima"
+down_revision = None
 branch_labels = None
 depends_on = None
 
