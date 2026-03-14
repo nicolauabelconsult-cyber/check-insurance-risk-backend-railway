@@ -251,7 +251,6 @@ class Cancellation(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
-
 class FraudFlag(Base):
     __tablename__ = "fraud_flags"
 
