@@ -50,6 +50,19 @@ def _score(query: str, subject: str) -> int:
     return 60
 
 
+def _make_report_reference(risk: Risk) -> str:
+    """
+    Referência institucional curta e profissional.
+    Ex.: CIR-RISK-20260315-AE762E
+    """
+    created = getattr(risk, "created_at", None)
+    if created is None:
+        created = datetime.now(timezone.utc)
+    stamp = created.strftime("%Y%m%d")
+    suffix = (str(getattr(risk, "id", "") or "").replace("-", "").upper()[:6] or "000001")
+    return f"CIR-RISK-{stamp}-{suffix}"
+
+
 @router.post("/search", response_model=RiskSearchOut)
 def search_risk(
     payload: RiskSearchIn,
@@ -332,6 +345,7 @@ def get_risk_pdf(
 
     base_url = getattr(settings, "BASE_URL", "").rstrip("/")
     verify_url = f"{base_url}/verify/{risk.id}/{integrity_hash}" if base_url else ""
+    report_reference = _make_report_reference(risk)
 
     underwriting_by_product = load_underwriting_by_product(
         db,
@@ -350,6 +364,7 @@ def get_risk_pdf(
         verify_url=verify_url,
         underwriting_by_product=underwriting_by_product,
         compliance_by_category=None,
+        report_reference=report_reference,
     )
 
     return Response(
