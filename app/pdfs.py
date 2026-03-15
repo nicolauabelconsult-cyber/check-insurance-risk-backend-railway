@@ -157,6 +157,7 @@ def build_risk_pdf_institutional(
     underwriting_by_product: Optional[Dict[str, Any]] = None,
     compliance_by_category: Optional[Dict[str, Any]] = None,
     report_title: str = "Relatório Institucional de Avaliação de Risco",
+    report_reference: Optional[str] = None,
 ) -> bytes:
     from io import BytesIO
 
@@ -185,21 +186,25 @@ def build_risk_pdf_institutional(
         generated_at = generated_at.replace(tzinfo=timezone.utc)
 
     styles = getSampleStyleSheet()
+
+    # Paleta única institucional
     BRAND = colors.HexColor("#0B1F3B")
-    LIGHT = colors.HexColor("#F6F7F9")
+    BRAND_2 = colors.HexColor("#324B72")
+    LIGHT = colors.HexColor("#F4F6F8")
     MID = colors.HexColor("#E9EDF3")
+    TEXT = colors.HexColor("#1A1A1A")
 
     H0 = ParagraphStyle("H0", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=16, spaceAfter=2, textColor=BRAND)
-    H1 = ParagraphStyle("H1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=12, spaceAfter=3)
-    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=10, spaceAfter=2)
-    H3 = ParagraphStyle("H3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=8.5, spaceAfter=1)
-    BODY = ParagraphStyle("BODY", parent=styles["BodyText"], fontName="Helvetica", fontSize=8.5, leading=10)
-    SMALL = ParagraphStyle("SMALL", parent=styles["BodyText"], fontName="Helvetica", fontSize=7.5, leading=9, textColor=colors.grey)
+    H1 = ParagraphStyle("H1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=12, spaceAfter=3, textColor=TEXT)
+    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=10, spaceAfter=2, textColor=TEXT)
+    H3 = ParagraphStyle("H3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=8.5, spaceAfter=1, textColor=TEXT)
+    BODY = ParagraphStyle("BODY", parent=styles["BodyText"], fontName="Helvetica", fontSize=8.5, leading=10, textColor=TEXT)
+    SMALL = ParagraphStyle("SMALL", parent=styles["BodyText"], fontName="Helvetica", fontSize=7.5, leading=9, textColor=colors.HexColor("#6B7280"))
 
     def header_footer(canvas, doc):
         canvas.saveState()
         canvas.setFont("Helvetica", 8)
-        canvas.setFillColor(colors.grey)
+        canvas.setFillColor(colors.HexColor("#6B7280"))
         canvas.drawString(18 * mm, 10 * mm, "Confidencial | Check Insurance Risk")
         canvas.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Página {doc.page}")
         canvas.restoreState()
@@ -227,7 +232,7 @@ def build_risk_pdf_institutional(
         return t
 
     def mini_tbl(data: List[List[str]], col_widths=None) -> Table:
-        return tbl(data, col_widths=col_widths, header_bg=colors.HexColor("#324B72"), font_size=7.5)
+        return tbl(data, col_widths=col_widths, header_bg=BRAND_2, font_size=7.5)
 
     def badge(text: str) -> Table:
         t = Table([[Paragraph(f"<b>{_safe(text, 180)}</b>", ParagraphStyle("BADGE", parent=BODY, textColor=colors.white))]])
@@ -247,14 +252,14 @@ def build_risk_pdf_institutional(
     def info_box(title: str, text: str) -> Table:
         data = [
             [Paragraph(f"<b>{_safe(title, 80)}</b>", BODY)],
-            [Paragraph(_safe(text, 500), BODY)],
+            [Paragraph(_safe(text, 700), BODY)],
         ]
         t = Table(data, colWidths=[170 * mm], hAlign="LEFT")
         t.setStyle(
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), MID),
-                    ("BOX", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+                    ("BOX", (0, 0), (-1, -1), 0.35, colors.lightgrey),
                     ("INNERGRID", (0, 0), (-1, -1), 0.2, colors.lightgrey),
                     ("LEFTPADDING", (0, 0), (-1, -1), 5),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 5),
@@ -286,7 +291,7 @@ def build_risk_pdf_institutional(
                 continue
         return default
 
-    def _render_source_evidence(src: str, hits: List[dict], max_rows: int = 5) -> List[Any]:
+    def _render_source_evidence(src: str, hits: List[dict], max_rows: int = 8) -> List[Any]:
         block: List[Any] = []
         block.append(Paragraph(f"Fonte: <b>{_safe(src, 80)}</b>", H3))
 
@@ -323,6 +328,9 @@ def build_risk_pdf_institutional(
             txt = _safe(v, 40) if v is not None else "N/D"
         return f"{txt} {currency}".strip() if currency else txt
 
+    def _render_compact_message(title: str, message: str) -> List[Any]:
+        return [Paragraph(title, H2), info_box("Resultado", message), Spacer(1, 3)]
+
     def _render_underwriting_product(product_type: str, pack: dict) -> List[Any]:
         block: List[Any] = []
 
@@ -350,10 +358,10 @@ def build_risk_pdf_institutional(
         block.append(Spacer(1, 3))
 
         # Apólices
-        block.append(Paragraph("Apólices", H3))
         if policies:
+            block.append(Paragraph("Apólices", H3))
             rows = [["Apólice", "Seguradora", "Estado", "Início", "Fim", "Prémio"]]
-            for p in policies[:5]:
+            for p in policies[:10]:
                 rows.append([
                     _safe(p.get("policy_number"), 30),
                     _safe(p.get("insurer_name"), 35),
@@ -363,15 +371,13 @@ def build_risk_pdf_institutional(
                     _fmt_money(p.get("premium_amount"), p.get("currency")),
                 ])
             block.append(mini_tbl(rows, col_widths=[26 * mm, 42 * mm, 24 * mm, 24 * mm, 24 * mm, 30 * mm]))
-        else:
-            block.append(Paragraph("Sem correspondência na base de apólices para este produto.", BODY))
-        block.append(Spacer(1, 2))
+            block.append(Spacer(1, 2))
 
         # Pagamentos
-        block.append(Paragraph("Pagamentos", H3))
         if payments:
+            block.append(Paragraph("Pagamentos", H3))
             rows = [["Vencimento", "Pagamento", "Valor", "Estado", "Apólice"]]
-            for p in payments[:5]:
+            for p in payments[:10]:
                 rows.append([
                     _fmt_date(p.get("due_at")),
                     _fmt_date(p.get("paid_at")),
@@ -380,15 +386,13 @@ def build_risk_pdf_institutional(
                     _safe(p.get("policy_number"), 25),
                 ])
             block.append(mini_tbl(rows, col_widths=[28 * mm, 28 * mm, 36 * mm, 28 * mm, 45 * mm]))
-        else:
-            block.append(Paragraph("Sem correspondência na base de pagamentos para este produto.", BODY))
-        block.append(Spacer(1, 2))
+            block.append(Spacer(1, 2))
 
         # Sinistros
-        block.append(Paragraph("Sinistros", H3))
         if claims:
+            block.append(Paragraph("Sinistros", H3))
             rows = [["Sinistro", "Data", "Estado", "Valor Reclamado", "Valor Pago"]]
-            for c in claims[:5]:
+            for c in claims[:10]:
                 rows.append([
                     _safe(c.get("claim_number"), 25),
                     _fmt_date(c.get("loss_date")),
@@ -397,39 +401,57 @@ def build_risk_pdf_institutional(
                     _fmt_money(c.get("amount_paid"), c.get("currency")),
                 ])
             block.append(mini_tbl(rows, col_widths=[28 * mm, 26 * mm, 28 * mm, 42 * mm, 42 * mm]))
-        else:
-            block.append(Paragraph("Sem histórico de sinistros associado a este produto.", BODY))
-        block.append(Spacer(1, 2))
+            block.append(Spacer(1, 2))
 
-        # Cancelamentos + Fraude
-        cf_left: List[List[str]] = [["Cancelamentos", "Detalhe"]]
-        if cancellations:
-            for c in cancellations[:3]:
+        # Layout adaptativo para cancelamentos/fraude
+        if cancellations and fraud_flags:
+            block.append(Paragraph("Eventos Adicionais", H3))
+
+            cf_left: List[List[str]] = [["Cancelamentos", "Detalhe"]]
+            for c in cancellations[:5]:
                 cf_left.append([
                     _fmt_date(c.get("cancelled_at")),
                     _safe(c.get("reason"), 70),
                 ])
-        else:
-            cf_left.append(["—", "Sem registo de cancelamento."])
 
-        cf_right: List[List[str]] = [["Fraude", "Detalhe"]]
-        if fraud_flags:
-            for f in fraud_flags[:3]:
+            cf_right: List[List[str]] = [["Fraude", "Detalhe"]]
+            for f in fraud_flags[:5]:
                 cf_right.append([
                     _safe(f.get("severity") or f.get("flag_type"), 20),
                     _safe(f.get("description"), 70),
                 ])
-        else:
-            cf_right.append(["—", "Sem sinalização de fraude."])
 
-        dual = Table(
-            [[mini_tbl(cf_left, col_widths=[26 * mm, 59 * mm]), mini_tbl(cf_right, col_widths=[26 * mm, 59 * mm])]],
-            colWidths=[85 * mm, 85 * mm],
-            hAlign="LEFT",
-        )
-        dual.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
-        block.append(dual)
-        block.append(Spacer(1, 3))
+            dual = Table(
+                [[mini_tbl(cf_left, col_widths=[26 * mm, 59 * mm]), mini_tbl(cf_right, col_widths=[26 * mm, 59 * mm])]],
+                colWidths=[85 * mm, 85 * mm],
+                hAlign="LEFT",
+            )
+            dual.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+            block.append(dual)
+            block.append(Spacer(1, 2))
+
+        elif cancellations:
+            block.append(Paragraph("Cancelamentos", H3))
+            rows = [["Data", "Motivo"]]
+            for c in cancellations[:10]:
+                rows.append([_fmt_date(c.get("cancelled_at")), _safe(c.get("reason"), 120)])
+            block.append(mini_tbl(rows, col_widths=[28 * mm, 142 * mm]))
+            block.append(Spacer(1, 2))
+
+        elif fraud_flags:
+            block.append(Paragraph("Fraude", H3))
+            rows = [["Severidade/Tipo", "Detalhe"]]
+            for f in fraud_flags[:10]:
+                rows.append([
+                    _safe(f.get("severity") or f.get("flag_type"), 30),
+                    _safe(f.get("description"), 120),
+                ])
+            block.append(mini_tbl(rows, col_widths=[35 * mm, 135 * mm]))
+            block.append(Spacer(1, 2))
+
+        else:
+            block.append(info_box("Eventos Adicionais", "Sem registo de cancelamentos ou sinalizações de fraude para este produto."))
+            block.append(Spacer(1, 2))
 
         if len(fraud_flags) > 0:
             observation = "Foram identificados indicadores de risco operacional associados a este produto, recomendando validação adicional e revisão reforçada."
@@ -472,6 +494,7 @@ def build_risk_pdf_institutional(
         or getattr(risk, "id", "")
     )
     search_id = str(search_id)
+    report_reference = report_reference or f"CIR-RISK-{generated_at.strftime('%Y%m%d')}-{str(getattr(risk, 'id', '')).replace('-', '').upper()[:6]}"
 
     buf = BytesIO()
     doc = SimpleDocTemplate(
@@ -496,7 +519,7 @@ def build_risk_pdf_institutional(
         [[
             tbl(
                 [
-                    ["Campo", "Valor"],
+                    ["Sujeito Analisado", "Valor"],
                     ["Nome", _safe(getattr(risk, "query_name", ""), 140)],
                     ["Nacionalidade", _safe(getattr(risk, "query_nationality", ""), 80)],
                     ["BI", _safe(getattr(risk, "query_bi", ""), 80)],
@@ -506,12 +529,12 @@ def build_risk_pdf_institutional(
             ),
             tbl(
                 [
-                    ["Campo", "Valor"],
+                    ["Informação da Análise", "Valor"],
+                    ["Referência", _safe(report_reference, 80)],
                     ["Data da análise (UTC)", generated_at.strftime("%Y-%m-%d %H:%M:%S %Z")],
-                    ["ID da Pesquisa", _safe(search_id, 80)],
                     ["Score", str(score_i) if score else "N/A"],
-                    ["Nível", band],
-                    ["Revisão", review_level],
+                    ["Classificação", band],
+                    ["Nível de revisão", review_level],
                 ],
                 col_widths=[45 * mm, 40 * mm],
             ),
@@ -541,7 +564,7 @@ def build_risk_pdf_institutional(
     story.append(info_box("Confidencialidade", "Documento confidencial e destinado exclusivamente às partes autorizadas. Qualquer divulgação depende de autorização prévia."))
     story.append(PageBreak())
 
-    # 1) Sumário
+    # 1) Sumário Executivo
     story.append(Paragraph("1) Sumário Executivo", H1))
     story.append(Paragraph(exec_summary, BODY))
     story.append(Spacer(1, 4))
@@ -556,7 +579,7 @@ def build_risk_pdf_institutional(
     story.append(Paragraph("2) Compliance", H1))
     story.append(
         Paragraph(
-            "Esta secção apresenta possíveis correspondências em bases de PEP, listas de sanções e watchlists, organizadas por fonte. Correspondências devem ser confirmadas por verificação humana.",
+            "Esta secção apresenta potenciais correspondências em bases de PEP, listas de sanções e watchlists, organizadas por fonte. Todas as correspondências devem ser confirmadas por verificação humana.",
             BODY,
         )
     )
@@ -583,11 +606,10 @@ def build_risk_pdf_institutional(
         story.append(Spacer(1, 3))
         story.append(Paragraph("Evidências por fonte (amostra)", H3))
         for src, hits in by_source.items():
-            story.append(KeepTogether(_render_source_evidence(str(src), hits or [], max_rows=5)))
+            story.append(KeepTogether(_render_source_evidence(str(src), hits or [], max_rows=8)))
 
     _render_category("2.1 PEP", comp.get("PEP") or {})
 
-    # Junta secções vazias numa só
     others = {
         "Sanções": comp.get("SANCTIONS") or {},
         "Watchlists": comp.get("WATCHLIST") or {},
@@ -596,22 +618,20 @@ def build_risk_pdf_institutional(
     non_empty = {k: v for k, v in others.items() if v}
     empty = [k for k, v in others.items() if not v]
 
-    if non_empty:
-        for title, val in non_empty.items():
-            _render_category(f"2.x {title}", val)
+    idx = 2
+    for title, val in non_empty.items():
+        idx += 1
+        _render_category(f"2.{idx} {title}", val)
 
     if empty:
-        story.append(Paragraph("2.x Outras Fontes de Compliance", H2))
-        story.append(
-            Paragraph(
-                "Não foram identificadas correspondências nas seguintes categorias: " + ", ".join(empty) + ".",
-                BODY,
-            )
-        )
-        story.append(Spacer(1, 3))
+        idx += 1
+        story.extend(_render_compact_message(
+            f"2.{idx} Outras Fontes de Compliance",
+            "Não foram identificadas correspondências nas seguintes categorias: " + ", ".join(empty) + "."
+        ))
 
     # 3) Underwriting
-    story.append(CondPageBreak(28 * mm))
+    story.append(CondPageBreak(24 * mm))
     story.append(Paragraph("3) Underwriting / Histórico de Seguros", H1))
     story.append(
         Paragraph(
@@ -641,10 +661,10 @@ def build_risk_pdf_institutional(
             story.append(Spacer(1, 3))
 
     # 4) Metodologia e Limitações
-    story.append(CondPageBreak(28 * mm))
+    story.append(CondPageBreak(24 * mm))
     story.append(Paragraph("4) Metodologia e Limitações", H1))
     methodology = Paragraph(
-        "A avaliação combina: (i) fontes de compliance (PEP/sanções/watchlists/adverse media), (ii) indicadores de underwriting quando disponíveis, e (iii) regras de decisão e classificação de risco. Os resultados são indicativos e devem ser confirmados por validação humana e documental.",
+        "A avaliação combina: (i) fontes de compliance, (ii) indicadores de underwriting quando disponíveis, e (iii) regras de decisão e classificação de risco. Os resultados são indicativos e devem ser confirmados por validação humana e documental.",
         BODY,
     )
 
@@ -660,7 +680,7 @@ def build_risk_pdf_institutional(
 
     methodology_block = Table([[methodology]], colWidths=[78 * mm])
     methodology_block.setStyle(TableStyle([
-        ("BOX", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+        ("BOX", (0, 0), (-1, -1), 0.35, colors.lightgrey),
         ("BACKGROUND", (0, 0), (-1, -1), colors.white),
         ("LEFTPADDING", (0, 0), (-1, -1), 5),
         ("RIGHTPADDING", (0, 0), (-1, -1), 5),
@@ -677,14 +697,15 @@ def build_risk_pdf_institutional(
     story.append(dual_ml)
     story.append(Spacer(1, 4))
 
-    # 5) Integridade
-    story.append(CondPageBreak(28 * mm))
+    # 5) Integridade e Verificação
+    story.append(CondPageBreak(24 * mm))
     story.append(Paragraph("5) Integridade e Verificação", H1))
     story.append(Paragraph("Este apêndice suporta rastreabilidade e auditoria.", BODY))
     story.append(Spacer(1, 4))
 
     integrity_rows = [
         ["Campo", "Valor"],
+        ["Referência do Relatório", _safe(report_reference, 120)],
         ["ID da Pesquisa", _safe(search_id, 120)],
         ["Risk ID (interno)", _safe(getattr(risk, "id", ""), 120)],
         ["Hash", _safe(integrity_hash, 240)],
@@ -715,7 +736,6 @@ def build_risk_pdf_institutional(
 
     doc.build(story, onFirstPage=header_footer, onLaterPages=header_footer)
     return buf.getvalue()
-
     # ============================================================
     # Data prep
     # ============================================================
