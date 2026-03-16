@@ -62,7 +62,12 @@ def _score_band(score: Any) -> Tuple[str, str]:
 
 
 def _normalize_matches_generic(matches: Any) -> Dict[str, Dict[str, List[dict]]]:
-    out: Dict[str, Dict[str, List[dict]]] = {"PEP": {}, "SANCTIONS": {}, "WATCHLIST": {}, "ADVERSE_MEDIA": {}}
+    out: Dict[str, Dict[str, List[dict]]] = {
+        "PEP": {},
+        "SANCTIONS": {},
+        "WATCHLIST": {},
+        "ADVERSE_MEDIA": {},
+    }
     if not matches:
         return out
     if isinstance(matches, dict):
@@ -145,7 +150,7 @@ def _institutional_summary(score: Any, pep: int, sanc: int, watch: int, adv: int
 
 
 # ============================================================
-# PDF Builder (Institutional 1.0 Final - compact layout)
+# PDF Builder
 # ============================================================
 def build_risk_pdf_institutional(
     risk: Any,
@@ -395,7 +400,7 @@ def build_risk_pdf_institutional(
         block: List[Any] = []
         block.append(Paragraph(f"Fonte: <b>{_safe(src, 80)}</b>", H3))
 
-        rows = [["#", "Nome/Entidade", "Score", "Ref.", "Observação"]]
+        rows = [["#", "Nome/Entidade", "Score", "Referência", "Observação"]]
         for i, h in enumerate((hits or [])[:max_rows], 1):
             if not isinstance(h, dict):
                 h = {"value": h}
@@ -538,14 +543,6 @@ def build_risk_pdf_institutional(
     decision, reasons = _decision_policy(score, pep_count, sanc_count, fraud_flags_count)
     exec_summary = _institutional_summary(score, pep_count, sanc_count, watch_count, adv_count, has_uw)
 
-    search_id = (
-        getattr(risk, "search_id", None)
-        or getattr(risk, "search_reference", None)
-        or getattr(risk, "reference", None)
-        or getattr(risk, "id", "")
-    )
-    search_id = str(search_id)
-
     report_reference = report_reference or f"CIR-RISK-{generated_at.strftime('%Y%m%d')}-{str(getattr(risk, 'id', '')).replace('-', '').upper()[:6]}"
 
     buf = BytesIO()
@@ -563,10 +560,10 @@ def build_risk_pdf_institutional(
     story: List[Any] = []
 
     # =========================
-    # PAGE 1 - Executive page
+    # Página 1 - Executiva
     # =========================
     story.append(Paragraph("CHECK INSURANCE RISK", H0))
-    story.append(Paragraph("Risk Intelligence Report", H1))
+    story.append(Paragraph("Relatório de Inteligência de Risco", H1))
     story.append(Spacer(1, 6))
 
     subject_block = Table(
@@ -581,8 +578,8 @@ def build_risk_pdf_institutional(
                     BODY,
                 ),
                 Paragraph(
-                    f"Referência: {_safe(report_reference, 80)}<br/>"
-                    f"Data: {generated_at.strftime('%Y-%m-%d %H:%M:%S UTC')}<br/>"
+                    f"Referência do Relatório: {_safe(report_reference, 80)}<br/>"
+                    f"Data da análise: {generated_at.strftime('%Y-%m-%d %H:%M:%S UTC')}<br/>"
                     f"Score: {str(score_i) if score else 'N/A'}<br/>"
                     f"Classificação: {band}<br/>"
                     f"Nível de revisão: {review_level}",
@@ -620,7 +617,7 @@ def build_risk_pdf_institutional(
     story.append(tbl(kpi_table, col_widths=[28 * mm, 26 * mm, 30 * mm, 35 * mm, 25 * mm, 26 * mm], center=True))
     story.append(Spacer(1, 6))
 
-    story.append(Paragraph("Executive Summary", H1))
+    story.append(Paragraph("Sumário Executivo", H1))
     story.append(Paragraph(exec_summary, BODY_CENTER))
     story.append(Spacer(1, 5))
 
@@ -636,9 +633,9 @@ def build_risk_pdf_institutional(
     story.append(PageBreak())
 
     # =========================
-    # PAGE 2 - Compliance
+    # Página 2 - Compliance
     # =========================
-    story.append(Paragraph("Compliance Review", H0))
+    story.append(Paragraph("Revisão de Compliance", H0))
     story.append(Spacer(1, 3))
     story.append(
         Paragraph(
@@ -684,10 +681,10 @@ def build_risk_pdf_institutional(
         story.append(Spacer(1, 3))
 
     # =========================
-    # PAGE 3+ - Insurance
+    # Página 3+ - Seguros
     # =========================
     story.append(PageBreak())
-    story.append(Paragraph("Insurance Risk Intelligence", H0))
+    story.append(Paragraph("Inteligência de Risco Segurável", H0))
     story.append(Spacer(1, 3))
     story.append(
         Paragraph(
@@ -705,10 +702,10 @@ def build_risk_pdf_institutional(
             story.append(Spacer(1, 5))
 
     # =========================
-    # Technical Appendix
+    # Página final - Apêndice Técnico
     # =========================
     story.append(PageBreak())
-    story.append(Paragraph("Technical Appendix", H0))
+    story.append(Paragraph("Apêndice Técnico", H0))
     story.append(Spacer(1, 3))
 
     methodology_text = (
@@ -718,21 +715,19 @@ def build_risk_pdf_institutional(
     story.append(info_box("Metodologia", methodology_text))
     story.append(Spacer(1, 4))
 
-    integrity_rows = [
-        ["Campo", "Valor"],
-        ["Referência do Relatório", _safe(report_reference, 120)],
-        ["ID da Pesquisa", _safe(search_id, 120)],
-        ["Risk ID (interno)", _safe(getattr(risk, "id", ""), 120)],
-        ["Hash", _safe(integrity_hash, 240)],
-        ["Assinatura do servidor", _safe(server_signature, 240)],
-        ["URL de verificação", _safe(verify_url, 260)],
-    ]
-    story.append(tbl(integrity_rows, col_widths=[52 * mm, 118 * mm], center=True))
+    story.append(
+        info_box(
+            "Verificação e autenticidade",
+            f"Referência do Relatório: {_safe(report_reference, 80)}. "
+            "A validação digital do documento encontra-se disponível por QR Code.",
+        )
+    )
     story.append(Spacer(1, 5))
 
     if qrcode is not None:
         try:
             from io import BytesIO as _BIO
+
             qr_img = qrcode.make(verify_url)
             qbuf = _BIO()
             qr_img.save(qbuf, format="PNG")
@@ -752,306 +747,6 @@ def build_risk_pdf_institutional(
             story.append(Paragraph("QR indisponível (erro ao gerar).", SMALL_CENTER))
     else:
         story.append(Paragraph("QR indisponível (dependência não instalada).", SMALL_CENTER))
-
-    doc.build(story, onFirstPage=header_footer, onLaterPages=header_footer)
-    return buf.getvalue()
-    # ============================================================
-    # Data prep
-    # ============================================================
-    score = getattr(risk, "score", None)
-    score_i = _score_to_int(score)
-    band, review_level = _score_band(score)
-
-    comp = compliance_by_category or _normalize_matches_generic(getattr(risk, "matches", None) or [])
-    pep_count, sanc_count, watch_count, adv_count = _counts_from_compliance(comp)
-
-    uw = underwriting_by_product or {}
-    has_uw = bool(uw)
-
-    fraud_flags_count = 0
-    try:
-        for _pt, pack in (uw or {}).items():
-            fraud_flags_count += len((pack or {}).get("fraud_flags", []) or [])
-    except Exception:
-        fraud_flags_count = 0
-
-    decision, reasons = _decision_policy(score, pep_count, sanc_count, fraud_flags_count)
-    exec_summary = _institutional_summary(score, pep_count, sanc_count, watch_count, adv_count, has_uw)
-
-    search_id = (
-        getattr(risk, "search_id", None)
-        or getattr(risk, "search_reference", None)
-        or getattr(risk, "reference", None)
-        or getattr(risk, "id", "")
-    )
-    search_id = str(search_id)
-
-    buf = BytesIO()
-    doc = SimpleDocTemplate(
-        buf,
-        pagesize=A4,
-        leftMargin=18 * mm,
-        rightMargin=18 * mm,
-        topMargin=16 * mm,
-        bottomMargin=16 * mm,
-        title=report_title,
-        author="Check Insurance Risk",
-    )
-
-    story: List[Any] = []
-
-    # ============================================================
-    # CAPA EXECUTIVA
-    # ============================================================
-    story.append(Paragraph("CHECK INSURANCE RISK", H0))
-    story.append(Paragraph(report_title, H1))
-    story.append(Spacer(1, 4))
-
-    person_rows = [
-        ["Campo", "Valor"],
-        ["Nome", _safe(getattr(risk, "query_name", ""), 140)],
-        ["Nacionalidade", _safe(getattr(risk, "query_nationality", ""), 80)],
-        ["BI", _safe(getattr(risk, "query_bi", ""), 80)],
-        ["Passaporte", _safe(getattr(risk, "query_passport", ""), 80)],
-        ["Data da análise (UTC)", generated_at.strftime("%Y-%m-%d %H:%M:%S %Z")],
-        ["ID da Pesquisa", _safe(search_id, 80)],
-    ]
-    story.append(tbl(person_rows, col_widths=[55 * mm, 110 * mm]))
-    story.append(Spacer(1, 6))
-
-    story.append(badge(f"DECISÃO RECOMENDADA: {decision}"))
-    story.append(Spacer(1, 6))
-
-    story.append(
-        tbl(
-            [
-                ["Score", "Nível", "Nível de Revisão", "PEP", "Sanções", "Watchlists", "Adverse Media"],
-                [str(score_i) if score else "N/A", band, review_level, str(pep_count), str(sanc_count), str(watch_count), str(adv_count)],
-            ],
-            col_widths=[16 * mm, 18 * mm, 45 * mm, 16 * mm, 20 * mm, 24 * mm, 25 * mm],
-        )
-    )
-    story.append(Spacer(1, 6))
-
-    story.append(Paragraph("Escopo (declaração institucional)", H3))
-    story.append(
-        Paragraph(
-            "Esta avaliação reflete os dados fornecidos na pesquisa e as fontes atualmente configuradas/ativas. "
-            "A decisão final deve incluir validação humana e documental conforme políticas internas e requisitos regulatórios.",
-            BODY,
-        )
-    )
-    story.append(Spacer(1, 6))
-    story.append(Paragraph("Confidencialidade", H3))
-    story.append(
-        Paragraph(
-            "Documento confidencial e destinado exclusivamente às partes autorizadas. Qualquer divulgação depende de autorização prévia.",
-            SMALL,
-        )
-    )
-
-    story.append(PageBreak())
-
-    # ============================================================
-    # 1) Sumário Executivo
-    # ============================================================
-    story.append(Paragraph("1) Sumário Executivo", H1))
-    story.append(Paragraph(exec_summary, BODY))
-    story.append(Spacer(1, 6))
-
-    rr = [["#", "Razão (Top 5)"]]
-    for i, r_ in enumerate(reasons, 1):
-        rr.append([str(i), _safe(r_, 260)])
-    story.append(tbl(rr, col_widths=[10 * mm, 155 * mm]))
-
-    # só quebra se não houver espaço para começar Compliance com “ar”
-    story.append(CondPageBreak(25 * mm))
-
-    # ============================================================
-    # 2) Compliance
-    # ============================================================
-    story.append(Paragraph("2) Compliance", H1))
-    story.append(
-        Paragraph(
-            "Esta secção apresenta possíveis correspondências em bases de PEP, listas de sanções e watchlists, organizadas por fonte. "
-            "Correspondências devem ser confirmadas por verificação humana.",
-            BODY,
-        )
-    )
-    story.append(Spacer(1, 4))
-
-    def _render_category(title: str, by_source: Dict[str, List[dict]]) -> None:
-        story.append(Paragraph(title, H2))
-        if not by_source:
-            story.append(Paragraph("Sem informações a apresentar (sem registos/correspondências disponíveis).", BODY))
-            story.append(Spacer(1, 4))
-            return
-
-        # resumo por fonte (mantém look&feel)
-        rows = [["Fonte", "Qtd. registos", "Top score"]]
-        for src, hits in by_source.items():
-            top = 0
-            for h in hits or []:
-                try:
-                    top = max(top, int((h or {}).get("match_score", 0) or 0))
-                except Exception:
-                    pass
-            rows.append([_safe(src, 60), str(len(hits or [])), str(top)])
-
-        story.append(tbl(rows, col_widths=[90 * mm, 35 * mm, 40 * mm]))
-        story.append(Spacer(1, 4))
-
-        # NOVO: evidências por fonte (amostra)
-        story.append(Paragraph("Evidências por fonte (amostra)", H3))
-        for src, hits in by_source.items():
-            story.append(KeepTogether(_render_source_evidence(str(src), hits or [], max_rows=5)))
-
-    _render_category("2.1 PEP", comp.get("PEP") or {})
-    _render_category("2.2 Sanções", comp.get("SANCTIONS") or {})
-    _render_category("2.3 Watchlists", comp.get("WATCHLIST") or {})
-    _render_category("2.4 Adverse Media", comp.get("ADVERSE_MEDIA") or {})
-
-    # ============================================================
-    # 3) Underwriting / Seguros (SEMPRE, mas sem criar páginas vazias)
-    # ============================================================
-    story.append(CondPageBreak(30 * mm))
-    story.append(Paragraph("3) Underwriting / Histórico de Seguros", H1))
-    story.append(
-        Paragraph(
-            "A análise abaixo apresenta o histórico agregado por tipo de produto de seguro (product_type), com base nos registos atualmente disponíveis.",
-            BODY,
-        )
-    )
-    story.append(Spacer(1, 4))
-
-    if not uw:
-        story.append(
-            Paragraph(
-                "Sem informações de seguros a apresentar (não existem registos disponíveis nas fontes/tabelas atualmente carregadas).",
-                BODY,
-            )
-        )
-        story.append(Spacer(1, 3))
-        story.append(
-            Paragraph(
-                "A ausência de dados de underwriting limita a avaliação do comportamento histórico associado a produtos de seguro.",
-                SMALL,
-            )
-        )
-    else:
-        for product_type in sorted(uw.keys(), key=lambda x: str(x)):
-            pack = uw.get(product_type) or {}
-
-            policies = pack.get("policies", []) or []
-            payments = pack.get("payments", []) or []
-            claims = pack.get("claims", []) or []
-            cancellations = pack.get("cancellations", []) or []
-            fraud_flags = pack.get("fraud_flags", []) or []
-
-            active_policies = 0
-            cancelled_policies = 0
-            for p in policies:
-                st = str((p or {}).get("status", "")).lower()
-                if st in ("active", "ativa", "ativo"):
-                    active_policies += 1
-                if st in ("cancelled", "canceled", "cancelada", "cancelado"):
-                    cancelled_policies += 1
-
-            late_payments = 0
-            for p in payments:
-                st = (p or {}).get("status", None)
-                if st and str(st).lower() in ("late", "atraso", "atrasado"):
-                    late_payments += 1
-
-            block: List[Any] = []
-            block.append(Paragraph(f"Tipo de Seguro: <b>{_safe(product_type, 60) or 'N/A'}</b>", H2))
-
-            summary_table = [
-                ["Indicador", "Valor"],
-                ["Número total de apólices", str(len(policies))],
-                ["Apólices ativas", str(active_policies)],
-                ["Apólices canceladas", str(cancelled_policies)],
-                ["Total de pagamentos registados", str(len(payments))],
-                ["Pagamentos em atraso", str(late_payments)],
-                ["Número de sinistros", str(len(claims))],
-                ["Cancelamentos", str(len(cancellations))],
-                ["Indicadores de fraude (fraud flags)", str(len(fraud_flags))],
-            ]
-            block.append(tbl(summary_table, col_widths=[95 * mm, 70 * mm]))
-            block.append(Spacer(1, 4))
-
-            if len(fraud_flags) > 0:
-                observation = "Foram identificados indicadores de risco operacional associados a este produto, recomendando validação adicional e revisão reforçada."
-            elif len(claims) > 0 and late_payments > 0:
-                observation = "O histórico demonstra ocorrência de sinistros e registos pontuais de atraso em pagamentos. Recomenda-se análise contextual adicional."
-            elif len(policies) > 0:
-                observation = "O histórico disponível demonstra comportamento regular, sem indicadores críticos de risco operacional."
-            else:
-                observation = "Não existem eventos relevantes registados para este produto."
-
-            block.append(Paragraph(f"<b>Observação:</b> {observation}", BODY))
-            block.append(Spacer(1, 6))
-            story.append(KeepTogether(block))
-
-    # ============================================================
-    # 4) Metodologia e Limitações
-    # ============================================================
-    story.append(CondPageBreak(35 * mm))
-    story.append(Paragraph("4) Metodologia e Limitações", H1))
-    story.append(
-        Paragraph(
-            "A avaliação combina: (i) fontes de compliance (PEP/sanções/watchlists/adverse media), "
-            "(ii) indicadores de underwriting quando disponíveis, e (iii) regras de decisão e classificação de risco. "
-            "Os resultados são indicativos e devem ser confirmados por validação humana e documental.",
-            BODY,
-        )
-    )
-    story.append(Spacer(1, 6))
-
-    limits = [
-        "A ausência de correspondências não constitui prova de inexistência de risco.",
-        "Fontes externas podem ter atrasos de atualização e diferenças de cobertura.",
-        "Correspondências aproximadas devem ser validadas manualmente antes de decisão final.",
-        "O relatório não substitui obrigações regulatórias, políticas internas, nem aconselhamento jurídico.",
-    ]
-    lt = [["#", "Limitação"]]
-    for i, t in enumerate(limits, 1):
-        lt.append([str(i), _safe(t, 260)])
-    story.append(tbl(lt, col_widths=[10 * mm, 155 * mm]))
-
-    # ============================================================
-    # 5) Integridade e Verificação
-    # ============================================================
-    story.append(CondPageBreak(35 * mm))
-    story.append(Paragraph("5) Integridade e Verificação", H1))
-    story.append(Paragraph("Este apêndice suporta rastreabilidade e auditoria.", BODY))
-    story.append(Spacer(1, 6))
-
-    integrity_rows = [
-        ["Campo", "Valor"],
-        ["ID da Pesquisa", _safe(search_id, 120)],
-        ["Risk ID (interno)", _safe(getattr(risk, "id", ""), 120)],
-        ["Hash", _safe(integrity_hash, 240)],
-        ["Assinatura do servidor", _safe(server_signature, 240)],
-        ["URL de verificação", _safe(verify_url, 260)],
-    ]
-    story.append(tbl(integrity_rows, col_widths=[55 * mm, 110 * mm]))
-    story.append(Spacer(1, 8))
-
-    if qrcode is not None:
-        try:
-            from io import BytesIO as _BIO
-            qr_img = qrcode.make(verify_url)
-            qbuf = _BIO()
-            qr_img.save(qbuf, format="PNG")
-            qbuf.seek(0)
-            story.append(Paragraph("QR Code de verificação:", BODY))
-            story.append(Spacer(1, 3))
-            story.append(Image(qbuf, width=28 * mm, height=28 * mm))
-        except Exception:
-            story.append(Paragraph("QR indisponível (erro ao gerar).", SMALL))
-    else:
-        story.append(Paragraph("QR indisponível (dependência não instalada).", SMALL))
 
     doc.build(story, onFirstPage=header_footer, onLaterPages=header_footer)
     return buf.getvalue()
