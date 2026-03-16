@@ -149,16 +149,6 @@ def _institutional_summary(score: Any, pep: int, sanc: int, watch: int, adv: int
     return " ".join(lines)
 
 
-def _translate_category_name(cat: str) -> str:
-    mapping = {
-        "PEP": "PEP",
-        "SANCTIONS": "Sanções",
-        "WATCHLIST": "Listas de observação",
-        "ADVERSE_MEDIA": "Meios adversos",
-    }
-    return mapping.get(str(cat).upper().strip(), _safe(cat, 50))
-
-
 def _translate_payment_status(v: Any) -> str:
     s = str(v or "").strip().lower()
     mapping = {
@@ -186,6 +176,8 @@ def _translate_policy_status(v: Any) -> str:
         "active": "Activa",
         "ativa": "Activa",
         "ativo": "Activo",
+        "activa": "Activa",
+        "activo": "Activo",
         "inactive": "Inactiva",
         "cancelled": "Cancelada",
         "canceled": "Cancelada",
@@ -264,7 +256,6 @@ def build_risk_pdf_institutional(
 
     styles = getSampleStyleSheet()
 
-    # Paleta institucional
     BRAND = colors.HexColor("#0F2747")
     BRAND_DARK = colors.HexColor("#09192E")
     LIGHT = colors.HexColor("#F6F8FB")
@@ -354,13 +345,6 @@ def build_risk_pdf_institutional(
         alignment=1,
     )
 
-    LABEL = ParagraphStyle(
-        "LABEL",
-        parent=BODY,
-        fontName="Helvetica-Bold",
-        textColor=BRAND_DARK,
-    )
-
     # =========================
     # Auxiliares internos
     # =========================
@@ -410,7 +394,7 @@ def build_risk_pdf_institutional(
         return t
 
     def mini_tbl(data: List[List[Any]], col_widths=None) -> Table:
-        return tbl(data, col_widths=col_widths, header_bg=BRAND, font_size=7.4, center=True)
+        return tbl(data, col_widths=col_widths, header_bg=BRAND, font_size=7.4, center=False)
 
     def info_box(title: str, text: str) -> Table:
         t = Table(
@@ -419,7 +403,7 @@ def build_risk_pdf_institutional(
                 [Paragraph(_safe(text, 1200), BODY)],
             ],
             colWidths=[170 * mm],
-            hAlign="CENTER",
+            hAlign="LEFT",
         )
         t.setStyle(
             TableStyle(
@@ -440,7 +424,7 @@ def build_risk_pdf_institutional(
         t = Table(
             [[Paragraph(f"<b>{_safe(text, 220)}</b>", BODY_CENTER)]],
             colWidths=[170 * mm],
-            hAlign="CENTER",
+            hAlign="LEFT",
         )
         t.setStyle(
             TableStyle(
@@ -470,7 +454,7 @@ def build_risk_pdf_institutional(
                 ],
             ],
             colWidths=[85 * mm, 85 * mm],
-            hAlign="CENTER",
+            hAlign="LEFT",
         )
         box.setStyle(
             TableStyle(
@@ -573,7 +557,7 @@ def build_risk_pdf_institutional(
             ["Pagamentos em atraso", str(late_payments), "Sinistros", str(len(claims))],
             ["Cancelamentos", str(len(cancellations)), "Sinalizações de fraude", str(len(fraud_flags))],
         ]
-        block.append(tbl(summary_table, col_widths=[48 * mm, 37 * mm, 48 * mm, 37 * mm], center=True))
+        block.append(tbl(summary_table, col_widths=[42.5 * mm, 42.5 * mm, 42.5 * mm, 42.5 * mm], center=False))
         block.append(Spacer(1, 3))
 
         if policies:
@@ -602,7 +586,7 @@ def build_risk_pdf_institutional(
                     _translate_payment_status(p.get("status")),
                     _safe(p.get("policy_number"), 25),
                 ])
-            block.append(mini_tbl(rows, col_widths=[28 * mm, 28 * mm, 36 * mm, 28 * mm, 45 * mm]))
+            block.append(mini_tbl(rows, col_widths=[26 * mm, 26 * mm, 36 * mm, 30 * mm, 52 * mm]))
             block.append(Spacer(1, 2))
 
         if claims:
@@ -616,7 +600,7 @@ def build_risk_pdf_institutional(
                     _fmt_money(c.get("amount_claimed"), c.get("currency")),
                     _fmt_money(c.get("amount_paid"), c.get("currency")),
                 ])
-            block.append(mini_tbl(rows, col_widths=[28 * mm, 26 * mm, 28 * mm, 42 * mm, 42 * mm]))
+            block.append(mini_tbl(rows, col_widths=[28 * mm, 24 * mm, 28 * mm, 45 * mm, 45 * mm]))
             block.append(Spacer(1, 2))
 
         if cancellations:
@@ -735,7 +719,7 @@ def build_risk_pdf_institutional(
         ["PEP", "Sanções", "Listas de observação", "Meios adversos", "Histórico segurador", "Fraude"],
         [str(pep_count), str(sanc_count), str(watch_count), str(adv_count), "SIM" if has_uw else "NÃO", str(fraud_flags_count)],
     ]
-    story.append(tbl(kpi_table, col_widths=[20 * mm, 24 * mm, 38 * mm, 31 * mm, 33 * mm, 24 * mm], center=True))
+    story.append(tbl(kpi_table, col_widths=[20 * mm, 24 * mm, 38 * mm, 31 * mm, 33 * mm, 24 * mm], center=False))
     story.append(Spacer(1, 5))
 
     story.append(Paragraph("Sumário executivo", H1))
@@ -745,7 +729,7 @@ def build_risk_pdf_institutional(
     rr = [["#", "Fundamentação da decisão"]]
     for i, r_ in enumerate(reasons[:5], 1):
         rr.append([str(i), _safe(r_, 260)])
-    story.append(tbl(rr, col_widths=[12 * mm, 158 * mm], center=True))
+    story.append(tbl(rr, col_widths=[12 * mm, 158 * mm], center=False))
     story.append(Spacer(1, 4))
 
     story.append(
@@ -787,7 +771,7 @@ def build_risk_pdf_institutional(
                 except Exception:
                     pass
             rows.append([_safe(src, 60), str(len(hits or [])), str(top)])
-        story.append(tbl(rows, col_widths=[95 * mm, 35 * mm, 40 * mm], center=True))
+        story.append(tbl(rows, col_widths=[95 * mm, 35 * mm, 40 * mm], center=False))
         story.append(Spacer(1, 3))
         for src, hits in by_source.items():
             story.append(KeepTogether(_render_source_evidence(str(src), hits or [], max_rows=10)))
@@ -854,23 +838,13 @@ def build_risk_pdf_institutional(
         "Os resultados têm natureza indicativa e devem ser confirmados por validação humana, documental e operacional."
     )
     story.append(info_box("Metodologia", methodology_text))
-    story.append(Spacer(1, 4))
-
-    technical_rows = [
-        ["Elemento", "Valor"],
-        ["Referência do relatório", _safe(report_reference, 90)],
-        ["Hash de integridade", _safe(integrity_hash, 90)],
-        ["Assinatura do servidor", _safe(server_signature, 90)],
-        ["Ligação de verificação", _safe(verify_url, 120)],
-    ]
-    story.append(tbl(technical_rows, col_widths=[48 * mm, 122 * mm], center=True))
     story.append(Spacer(1, 5))
 
     story.append(
         info_box(
             "Autenticidade e verificação",
             "A validação digital do documento encontra-se disponível através do código QR de verificação. "
-            "A autenticidade do relatório deve ser confirmada com base na referência, no hash de integridade e na assinatura do servidor.",
+            "A autenticidade do relatório pode ser confirmada electronicamente no sistema de validação institucional.",
         )
     )
     story.append(Spacer(1, 5))
@@ -890,7 +864,7 @@ def build_risk_pdf_institutional(
             qr_table = Table(
                 [[Image(qbuf, width=26 * mm, height=26 * mm)]],
                 colWidths=[170 * mm],
-                hAlign="CENTER",
+                hAlign="LEFT",
             )
             qr_table.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER")]))
             story.append(qr_table)
